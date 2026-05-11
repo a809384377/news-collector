@@ -1,6 +1,6 @@
 [project]
 name = "raw-news-collector"
-version = "0.5.1"
+version = "0.5.2"
 description = "采集层基础服务：上游信源采集 → 落库 → SDK 暴露给下游多领域消费方"
 readme = "README.md"
 requires-python = ">=3.11"

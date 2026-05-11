@@ -13,7 +13,7 @@ SDK ``read_raw`` 的薄 CLI 包装，给 agent 与人类调试者用。
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import typer
@@ -28,6 +28,15 @@ _TIME_KEEP = 19  # len("YYYY-MM-DD HH:MM:SS")
 
 
 # ---- 工具 -------------------------------------------------------------------
+
+
+def _now_utc() -> datetime:
+    """当前 UTC 时间。
+
+    单独抽出来便于测试 monkeypatch 注入 ANCHOR（KNOWLEDGE R-6 模式）：
+    ``monkeypatch.setattr(read, "_now_utc", lambda: ANCHOR)``。
+    """
+    return datetime.now(timezone.utc)
 
 
 def _format_time(dt: datetime) -> str:
@@ -117,8 +126,9 @@ def read_cmd(
         raise typer.Exit(code=1)
 
     # since 解析（默认 "24h"，失败 exit 2）
+    # 注入 _now_utc() 让测试可锁 ANCHOR（R-6 模式）
     try:
-        since_dt = parse_since(since)
+        since_dt = parse_since(since, now=_now_utc())
     except ValueError as exc:
         typer.echo(f"[err] {exc}", err=True)
         raise typer.Exit(code=2) from exc

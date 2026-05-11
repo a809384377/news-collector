@@ -68,7 +68,10 @@ def _run_compose(
     if not docker_available():
         raise DockerError("docker CLI 未安装或不在 PATH")
     if not compose_file.exists():
-        raise DockerError(f"docker-compose.yml 不存在: {compose_file}")
+        raise DockerError(
+            f"docker-compose.yml 不存在: {compose_file}\n"
+            "请运行 `news-collector setup` 自动补齐（v0.5.1 起 compose 文件存放在 home 目录）"
+        )
 
     cmd = _compose_base_cmd(compose_file) + args
     try:

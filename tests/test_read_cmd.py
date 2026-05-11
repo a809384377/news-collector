@@ -34,10 +34,13 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
 import typer
 from typer.testing import CliRunner
 
+from news_collector.commands import read as read_module
 from news_collector.commands.read import read_cmd
+from tests.conftest import ANCHOR
 
 
 # ---- helpers ---------------------------------------------------------------
@@ -105,12 +108,17 @@ def test_read_invalid_since_exits_2(populated_raw_db) -> None:
     assert "not-a-time" in result.output
 
 
-def test_read_default_since_24h_filters_correctly(populated_raw_db) -> None:
-    """24h 窗口边界：1h / 12h 这两条必然在窗口内（不与运行时刻偏移耦合）。
+def test_read_default_since_24h_filters_correctly(
+    populated_raw_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """24h 窗口（锁时刻到 ANCHOR）：1h / 12h / 23h 必在窗内；25h / 30d / 60d 必在窗外。
 
-    23h / 25h 等边界条目命中与否依赖测试运行时刻 vs ANCHOR 的相对位置，
-    不在断言里固化。30d / 60d 必然落在窗口外。
+    s7-agent-skill-and-hotfix Step 1.5 修复：原版断言耦合真实运行时刻，
+    当 now > ANCHOR + 12h 时 dotey-12h(ANCHOR-12h) 会被推出 24h 窗口而 fail。
+    现统一 monkeypatch read 模块的 `_now_utc` 锁到 ANCHOR（KNOWLEDGE R-6 模式）。
     """
+    monkeypatch.setattr(read_module, "_now_utc", lambda: ANCHOR)
+
     db_path, _conn = populated_raw_db
     home = db_path.parent
 
@@ -120,11 +128,13 @@ def test_read_default_since_24h_filters_correctly(populated_raw_db) -> None:
 
     assert result.exit_code == 0
     ids = _external_ids(_parse_ndjson(result))
-    # 必在窗口内
+    # 必在窗口内（now=ANCHOR，cutoff=ANCHOR-24h）
     assert "an-1h" in ids
     assert "cl-1h" in ids
     assert "dotey-12h" in ids
+    assert "an-23h" in ids  # 23h ago 在 24h 窗内
     # 必在窗口外
+    assert "simon-25h" not in ids  # 25h ago 越过 24h 边界
     assert "an-8d" not in ids
     assert "simon-30d" not in ids
     assert "an-old-1" not in ids
