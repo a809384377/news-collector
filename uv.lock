@@ -685,7 +685,7 @@ wheels = [
 
 [[package]]
 name = "raw-news-collector"
-version = "0.5.1"
+version = "0.5.3"
 source = { editable = "." }
 dependencies = [
     { name = "feedparser" },

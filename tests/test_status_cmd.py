@@ -157,7 +157,9 @@ def test_status_docker_unavailable(
 
     assert result.exit_code == 0
     out = result.output
-    assert "(docker unavailable: docker daemon 未运行)" in out
+    # v0.5.3 改为多行展示（标题 + 内容缩进），不再用括号包装
+    assert "docker unavailable:" in out
+    assert "docker daemon 未运行" in out
     # 其他段仍输出
     assert "== Database ==" in out
     assert "total rows  : 1" in out

@@ -63,7 +63,13 @@ def _print_containers(compose_file: Path) -> None:
     try:
         status = container_status(compose_file)
     except DockerError as exc:
-        typer.echo(f"  (docker unavailable: {exc})")
+        # DockerError message 可能多行（如 yml 缺失会附 setup 引导提示）。
+        # 旧版 `f"  (docker unavailable: {exc})"` 把多行包进括号，第二行
+        # 顶到行首没缩进，括号闭合错位——v0.5.2 实测视觉残缺。
+        # 改为标题行 + 内容按行缩进 4 空格，第二行起天然对齐。
+        typer.echo("  docker unavailable:")
+        for line in str(exc).split("\n"):
+            typer.echo(f"    {line}")
         return
 
     # 固定顺序 rsshub / redis 而非 dict 序，输出更稳定
