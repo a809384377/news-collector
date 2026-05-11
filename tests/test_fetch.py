@@ -1,22 +1,30 @@
-"""pipeline.fetch 测试：用 stub adapter 注入，验证编排 + 去重 + source_state。"""
+"""pipeline.fetch 测试：用 stub adapter 注入，验证编排 + 去重 + source_state。
+
+末尾追加了 ``newsbox fetch`` CLI 命令的 ``--json`` 测试（s9 Step 2）。
+"""
 
 from __future__ import annotations
 
 import asyncio
+import json as _json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from news_collector import db as db_module
-from news_collector.config import (
+import typer
+from typer.testing import CliRunner
+
+from newsbox import db as db_module
+from newsbox.commands import fetch as fetch_cmd_mod
+from newsbox.config import (
     AppConfig,
     FetchConfig,
     HttpRetryConfig,
     LoggingConfig,
     Secrets,
 )
-from news_collector.models import RawArticle
-from news_collector.pipeline import fetch as fetch_module
+from newsbox.models import RawArticle
+from newsbox.pipeline import fetch as fetch_module
 
 
 # ---- 测试辅助 ---------------------------------------------------------------
@@ -912,3 +920,111 @@ def test_rss_and_web_buckets_run_in_parallel(tmp_path: Path) -> None:
     assert elapsed < 0.18, (
         f"两桶应外层并行，elapsed={elapsed:.3f}s 太长，疑似串行"
     )
+
+
+# ---- CLI `--json` 测试（s9 Step 2）------------------------------------------
+
+
+def _build_fetch_app() -> typer.Typer:
+    app = typer.Typer()
+    app.command("fetch")(fetch_cmd_mod.fetch_cmd)
+    app.command("_placeholder", hidden=True)(lambda: None)
+    return app
+
+
+def test_fetch_cli_json_happy(tmp_path: Path, monkeypatch: Any) -> None:
+    """CLI fetch --json 成功：emit_ok 一块 JSON，含 total_inserted + results 数组。"""
+    home = tmp_path / "home"
+    home.mkdir()
+
+    # mock load_app_config 返回最小 cfg（避免读 home/config.yaml + init_logging）
+    monkeypatch.setattr(fetch_cmd_mod, "load_app_config", lambda *a, **kw: _make_config())
+
+    # mock pipeline.run_fetch 返回一个固定 summary
+    summary = fetch_module.FetchSummary(
+        results=[
+            fetch_module.SourceFetchResult(
+                source_type="rss",
+                source_id="anthropic_blog",
+                fetched=3,
+                inserted=2,
+                deduped_url=0,
+                deduped_external=1,
+            ),
+            fetch_module.SourceFetchResult(
+                source_type="web",
+                source_id="some_web",
+                fetched=0,
+                inserted=0,
+                skipped=True,
+            ),
+        ],
+        total_inserted=2,
+    )
+
+    async def _fake_run_fetch(*args: Any, **kwargs: Any):
+        return summary
+
+    monkeypatch.setattr(fetch_module, "run_fetch", _fake_run_fetch)
+
+    runner = CliRunner()
+    result = runner.invoke(_build_fetch_app(), ["fetch", "--home", str(home), "--json"])
+
+    assert result.exit_code == 0, result.output
+    payload = _json.loads(result.output)
+    assert payload["ok"] is True
+    assert payload["message"] == "fetch complete"
+    d = payload["details"]
+    assert d["total_inserted"] == 2
+    assert len(d["results"]) == 2
+    r0 = d["results"][0]
+    assert r0["source_type"] == "rss"
+    assert r0["source_id"] == "anthropic_blog"
+    assert r0["fetched"] == 3
+    assert r0["inserted"] == 2
+    assert r0["deduped_external"] == 1
+    assert r0["skipped"] is False
+    assert r0["error"] is None
+    r1 = d["results"][1]
+    assert r1["skipped"] is True
+
+
+def test_fetch_cli_json_empty_results(tmp_path: Path, monkeypatch: Any) -> None:
+    """CLI fetch --json 无匹配源：emit_ok 但 results=[]，不输出 '(no sources matched)' 文本。"""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(fetch_cmd_mod, "load_app_config", lambda *a, **kw: _make_config())
+
+    async def _fake_run_fetch(*args: Any, **kwargs: Any):
+        return fetch_module.FetchSummary()
+
+    monkeypatch.setattr(fetch_module, "run_fetch", _fake_run_fetch)
+
+    runner = CliRunner()
+    result = runner.invoke(_build_fetch_app(), ["fetch", "--home", str(home), "--json"])
+
+    assert result.exit_code == 0, result.output
+    payload = _json.loads(result.output)
+    assert payload["ok"] is True
+    assert payload["details"]["total_inserted"] == 0
+    assert payload["details"]["results"] == []
+    # 人类视图的提示不应混入 JSON 输出
+    assert "no sources matched" not in result.output
+
+
+def test_fetch_cli_json_invalid_since(tmp_path: Path, monkeypatch: Any) -> None:
+    """CLI fetch --json --since=<invalid>：emit_err + exit 2，不抛 traceback（codex P1 修）。"""
+    home = tmp_path / "home"
+    home.mkdir()
+    # 不需 mock load_app_config / run_fetch —— --since 解析在它们之前
+    runner = CliRunner()
+    result = runner.invoke(
+        _build_fetch_app(),
+        ["fetch", "--home", str(home), "--json", "--since", "not-a-time"],
+    )
+
+    assert result.exit_code == 2, result.output
+    payload = _json.loads(result.output)
+    assert payload["ok"] is False
+    assert "invalid --since" in payload["message"]
+    assert payload["details"]["since"] == "not-a-time"

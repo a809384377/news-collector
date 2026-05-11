@@ -50,3 +50,7 @@ Thumbs.db
 
 # Docker overrides
 docker-compose.override.yml
+
+# AI workspace machine artifacts
+ai/cache/
+.playwright-mcp/

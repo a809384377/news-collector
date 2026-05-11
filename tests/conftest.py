@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from news_collector.db import get_conn, init_db
+from newsbox.db import get_conn, init_db
 
 
 # tmp_db 数据围绕这个 anchor 排布：60d 前 / 30d 前 / 24h 前等关键切边界都基于

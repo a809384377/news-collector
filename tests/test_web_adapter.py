@@ -23,7 +23,7 @@ from typing import Callable
 import httpx
 import pytest
 
-from news_collector.adapters.web_adapter import (
+from newsbox.adapters.web_adapter import (
     _PER_ARTICLE_TIMEOUT_SECONDS,
     _TIMEOUT_SECONDS,
     WebAdapter,

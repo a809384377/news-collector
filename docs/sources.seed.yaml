@@ -1,12 +1,12 @@
-# news-collector 一期信源种子清单
+# newsbox 一期信源种子清单
 #
-# 重要：本文件是 ``src/news_collector/data/sources.seed.yaml`` 的对外可读镜像（s6-distribution-package
+# 重要：本文件是 ``src/newsbox/data/sources.seed.yaml`` 的对外可读镜像（s6-distribution-package
 # 引入）。CLI 实际通过 importlib.resources 读 package data；改动**任意一份**后必须用
-# `cp docs/sources.seed.yaml src/news_collector/data/` 同步另一份，否则发布版与开发版会漂移。
+# `cp docs/sources.seed.yaml src/newsbox/data/` 同步另一份，否则发布版与开发版会漂移。
 # 后续 sprint 计划统一为单一来源。
 #
-# 用途：``news-collector setup`` / ``news-collector sources seed`` 时由 ``seed_sources()`` 读取，
-# 拷贝到 ``~/.news-collector/sources.yaml``
+# 用途：``newsbox setup`` / ``newsbox sources seed`` 时由 ``seed_sources()`` 读取，
+# 拷贝到 ``~/.newsbox/sources.yaml``
 # 来源：docs/需求描述和调研.md §信源梳理
 #
 # ───────────────────────────────────────────────
@@ -21,7 +21,7 @@
 #
 # domain 字段：一期统一 [ai]（按 D5 决策；将来跨领域时再按条目精化）
 #
-# enabled 缺省 true；标 false 表示种子写入 ~/.news-collector/sources.yaml 后默认关闭，需用户手工开启
+# enabled 缺省 true；标 false 表示种子写入 ~/.newsbox/sources.yaml 后默认关闭，需用户手工开启
 # ───────────────────────────────────────────────
 
 # ============================================================

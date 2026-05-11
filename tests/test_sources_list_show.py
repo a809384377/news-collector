@@ -1,4 +1,4 @@
-"""``news-collector sources list`` / ``show`` 命令测试。
+"""``newsbox sources list`` / ``show`` 命令测试。
 
 s4-sources-management Step 5 subagent A 产出。
 
@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from news_collector.cli import app
+from newsbox.cli import app
 
 # ------------- fixture：含 rss + web 的 sample sources.yaml ----------------
 
@@ -57,10 +57,10 @@ web:
 
 @pytest.fixture
 def make_home(tmp_path: Path):
-    """工厂：写一份 yaml 到 ``<tmp>/.news-collector/sources.yaml``，返回 home Path。"""
+    """工厂：写一份 yaml 到 ``<tmp>/.newsbox/sources.yaml``，返回 home Path。"""
 
     def _factory(yaml_text: str = SAMPLE_YAML) -> Path:
-        home = tmp_path / ".news-collector"
+        home = tmp_path / ".newsbox"
         home.mkdir(parents=True, exist_ok=True)
         (home / "sources.yaml").write_text(yaml_text, encoding="utf-8")
         return home
@@ -330,3 +330,101 @@ def test_show_does_not_leak_neighbor_section_comments(
     assert "历史决策记录" not in out
     # 顶部注释也不该出现
     assert "顶部注释" not in out
+
+
+# ============================ --json （s9 Step 2） =========================
+
+import json as _json  # noqa: E402
+
+
+def test_list_json_golden(runner: CliRunner, make_home) -> None:
+    """``sources list --json`` 输出按类型聚合的 schema。"""
+    home = make_home()
+    r = runner.invoke(app, ["sources", "list", "--home", str(home), "--json"])
+    assert r.exit_code == 0, r.output
+    payload = _json.loads(r.stdout)
+    assert payload["total"] == 6
+    assert payload["enabled_total"] == 4
+    # 两个类型 key 都存在
+    assert "rss" in payload and "web" in payload
+    assert payload["rss"]["total"] == 4
+    assert payload["rss"]["enabled"] == 3
+    assert payload["web"]["total"] == 2
+    assert payload["web"]["enabled"] == 1
+    # sources 列表里每条带 id/tier/enabled/url
+    rss_ids = {s["id"] for s in payload["rss"]["sources"]}
+    assert {"x_dotey", "x_kepano", "gh_anthropic", "rss_disabled"} <= rss_ids
+    # rss_disabled 标 enabled=False
+    rss_disabled = next(
+        s for s in payload["rss"]["sources"] if s["id"] == "rss_disabled"
+    )
+    assert rss_disabled["enabled"] is False
+
+
+def test_list_json_missing_yaml(runner: CliRunner, tmp_path: Path) -> None:
+    """``sources list --json`` yaml 不存在 → ok=False + exit 1。"""
+    empty_home = tmp_path / "empty"
+    empty_home.mkdir()
+    r = runner.invoke(
+        app, ["sources", "list", "--home", str(empty_home), "--json"]
+    )
+    assert r.exit_code == 1
+    payload = _json.loads(r.stdout)
+    assert payload["ok"] is False
+    assert "sources.yaml not found" in payload["message"]
+
+
+def test_list_json_mutually_exclusive_flags(
+    runner: CliRunner, make_home
+) -> None:
+    """``sources list --enabled-only --disabled-only --json`` → emit_err + exit 2（codex P1 修）。"""
+    home = make_home()
+    r = runner.invoke(
+        app,
+        [
+            "sources",
+            "list",
+            "--home",
+            str(home),
+            "--enabled-only",
+            "--disabled-only",
+            "--json",
+        ],
+    )
+    assert r.exit_code == 2
+    payload = _json.loads(r.stdout)
+    assert payload["ok"] is False
+    assert "互斥" in payload["message"]
+    assert payload["details"]["flag_a"] == "--enabled-only"
+    assert payload["details"]["flag_b"] == "--disabled-only"
+
+
+def test_show_json_golden(runner: CliRunner, make_home) -> None:
+    """``sources show --json`` 输出单条信源完整字段。"""
+    home = make_home()
+    r = runner.invoke(
+        app, ["sources", "show", "x_dotey", "--home", str(home), "--json"]
+    )
+    assert r.exit_code == 0, r.output
+    payload = _json.loads(r.stdout)
+    assert payload["id"] == "x_dotey"
+    assert payload["type"] == "rss"
+    assert payload["index"] == 0
+    assert payload["enabled"] is True  # 缺省视为 true
+    assert payload["tier"] == "kol"
+    assert payload["domain"] == ["ai"]
+    assert payload["url"].startswith("http://localhost:1200")
+
+
+def test_show_json_not_found(runner: CliRunner, make_home) -> None:
+    """``sources show --json`` 未找到 → ok=False + exit 1。"""
+    home = make_home()
+    r = runner.invoke(
+        app,
+        ["sources", "show", "no_such_id", "--home", str(home), "--json"],
+    )
+    assert r.exit_code == 1
+    payload = _json.loads(r.stdout)
+    assert payload["ok"] is False
+    assert "source not found" in payload["message"]
+    assert payload["details"]["id"] == "no_such_id"

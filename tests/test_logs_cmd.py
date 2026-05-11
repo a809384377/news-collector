@@ -1,4 +1,4 @@
-"""``news-collector logs`` 命令测试。
+"""``newsbox logs`` 命令测试。
 
 覆盖点：
 1. 日志文件不存在 → exit 1 + 错误提示
@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -21,8 +22,8 @@ import typer
 import yaml
 from typer.testing import CliRunner
 
-from news_collector import logging_setup
-from news_collector.commands.logs import logs_cmd
+from newsbox import logging_setup
+from newsbox.commands.logs import logs_cmd
 
 
 @pytest.fixture(autouse=True)
@@ -58,7 +59,7 @@ def _prepare_home(tmp_path: Path) -> Path:
     config_override = {
         "logging": {
             "level": "info",
-            "file": "logs/news-collector.log",  # 相对路径 → 落到 home 下
+            "file": "logs/newsbox.log",  # 相对路径 → 落到 home 下
             "rotation": "daily",
             "retention_days": 30,
         }
@@ -78,13 +79,13 @@ def test_logs_file_not_exists(
     创建空文件。为了真触达「不存在」分支，把 init_logging 替换为 no-op。
     """
     home = _prepare_home(tmp_path)
-    log_file = home / "logs" / "news-collector.log"
+    log_file = home / "logs" / "newsbox.log"
     if log_file.exists():
         log_file.unlink()
 
     # 让 init_logging 不真挂 sink（也就不会 touch 出空文件）
     monkeypatch.setattr(
-        "news_collector.commands._helpers.logging_setup.init_logging",
+        "newsbox.commands._helpers.logging_setup.init_logging",
         lambda *a, **kw: None,
     )
 
@@ -100,7 +101,7 @@ def test_logs_file_not_exists(
 def test_logs_file_empty(tmp_path: Path) -> None:
     """日志文件存在但 0 字节 → exit 0 + 输出含「log file is empty」。"""
     home = _prepare_home(tmp_path)
-    log_file = home / "logs" / "news-collector.log"
+    log_file = home / "logs" / "newsbox.log"
     log_file.write_text("", encoding="utf-8")  # 0 字节
 
     runner = CliRunner()
@@ -116,13 +117,13 @@ def test_logs_tail_default_50(
 ) -> None:
     """写入 100 行，默认 ``--tail=50`` → 显示最后 50 行。"""
     home = _prepare_home(tmp_path)
-    log_file = home / "logs" / "news-collector.log"
+    log_file = home / "logs" / "newsbox.log"
     lines = [f"line-{i:03d}\n" for i in range(100)]
     log_file.write_text("".join(lines), encoding="utf-8")
 
     # 让 init_logging 不真挂 sink，避免它在文件末尾追加无关日志干扰断言
     monkeypatch.setattr(
-        "news_collector.commands._helpers.logging_setup.init_logging",
+        "newsbox.commands._helpers.logging_setup.init_logging",
         lambda *a, **kw: None,
     )
 
@@ -145,12 +146,12 @@ def test_logs_tail_custom_n(
 ) -> None:
     """写入 100 行，``--tail=10`` → 显示最后 10 行。"""
     home = _prepare_home(tmp_path)
-    log_file = home / "logs" / "news-collector.log"
+    log_file = home / "logs" / "newsbox.log"
     lines = [f"line-{i:03d}\n" for i in range(100)]
     log_file.write_text("".join(lines), encoding="utf-8")
 
     monkeypatch.setattr(
-        "news_collector.commands._helpers.logging_setup.init_logging",
+        "newsbox.commands._helpers.logging_setup.init_logging",
         lambda *a, **kw: None,
     )
 
@@ -170,17 +171,77 @@ def test_logs_tail_custom_n(
     assert out.count("line-") == 10
 
 
+def test_logs_json_happy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--json：返回 {path, lines[], tail}，lines 长度等于 tail 上限。"""
+    home = _prepare_home(tmp_path)
+    log_file = home / "logs" / "newsbox.log"
+    lines = [f"line-{i:03d}\n" for i in range(100)]
+    log_file.write_text("".join(lines), encoding="utf-8")
+
+    monkeypatch.setattr(
+        "newsbox.commands._helpers.logging_setup.init_logging",
+        lambda *a, **kw: None,
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        _build_app(),
+        ["logs", "--home", str(home), "--tail", "5", "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["path"] == str(log_file)
+    assert payload["tail"] == 5
+    # lines 应为最后 5 行，且去掉末尾换行
+    assert payload["lines"] == [
+        "line-095",
+        "line-096",
+        "line-097",
+        "line-098",
+        "line-099",
+    ]
+
+
+def test_logs_json_file_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--json + 文件不存在：emit_err + exit 1。"""
+    home = _prepare_home(tmp_path)
+    log_file = home / "logs" / "newsbox.log"
+    if log_file.exists():
+        log_file.unlink()
+
+    monkeypatch.setattr(
+        "newsbox.commands._helpers.logging_setup.init_logging",
+        lambda *a, **kw: None,
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        _build_app(), ["logs", "--home", str(home), "--json"]
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert "log file not found" in payload["message"]
+    assert payload["details"]["path"] == str(log_file)
+
+
 def test_logs_handles_invalid_utf8(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """日志含非法 utf-8 字节（如 0xff）时 errors='replace' 兜底不崩溃。"""
     home = _prepare_home(tmp_path)
-    log_file = home / "logs" / "news-collector.log"
+    log_file = home / "logs" / "newsbox.log"
     # 写入二进制：包含 0xff 等非法 utf-8 字节
     log_file.write_bytes(b"good-line-1\nbad-\xff\xfe-line\nfinal-line\n")
 
     monkeypatch.setattr(
-        "news_collector.commands._helpers.logging_setup.init_logging",
+        "newsbox.commands._helpers.logging_setup.init_logging",
         lambda *a, **kw: None,
     )
 

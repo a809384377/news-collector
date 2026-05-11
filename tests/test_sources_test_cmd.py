@@ -19,9 +19,9 @@ import pytest
 import typer
 from typer.testing import CliRunner
 
-from news_collector.commands.sources import test_cmd as test_cmd_module
-from news_collector.commands.sources.test_cmd import sources_test_cmd
-from news_collector.models import RawArticle
+from newsbox.commands.sources import test_cmd as test_cmd_module
+from newsbox.commands.sources.test_cmd import sources_test_cmd
+from newsbox.models import RawArticle
 
 
 SAMPLE_YAML = """\
@@ -68,7 +68,7 @@ def runner() -> CliRunner:
 @pytest.fixture
 def sources_home(tmp_path: Path) -> Path:
     """tmp home + 写入 sample sources.yaml。"""
-    h = tmp_path / ".news-collector"
+    h = tmp_path / ".newsbox"
     h.mkdir()
     (h / "sources.yaml").write_text(SAMPLE_YAML, encoding="utf-8")
     return h
@@ -359,3 +359,111 @@ def test_body_preview_truncates_and_replaces_newlines(
     assert "published_at: —" in out
     # is_long_form 非 None → 原样输出
     assert "is_long_form: note_tweet" in out
+
+
+# ============================ --json （s9 Step 2） =========================
+
+import json as _json  # noqa: E402
+
+
+def test_test_cmd_json_ok(
+    runner: CliRunner,
+    cli_app: typer.Typer,
+    sources_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``sources test <id> --json`` 黄金路径。"""
+    patch_adapter(
+        monkeypatch, FakeAdapter(articles=make_articles(3, source_id="x_dotey"))
+    )
+
+    r = runner.invoke(
+        cli_app,
+        ["test", "x_dotey", "--home", str(sources_home), "--json"],
+    )
+    assert r.exit_code == 0, r.output
+    payload = _json.loads(r.stdout)
+    assert payload["id"] == "x_dotey"
+    assert payload["type"] == "rss"
+    assert payload["ok"] is True
+    assert payload["count"] == 3
+    assert payload["shown"] == 3
+    assert payload["error"] is None
+    assert len(payload["items"]) == 3
+    # 字段完整
+    first = payload["items"][0]
+    assert first["external_id"] == "ext-0"
+    assert first["title"] == "Title number 0"
+    assert first["published_at"] == "2026-05-09T08:00:00+00:00"
+
+
+def test_test_cmd_json_zero_articles(
+    runner: CliRunner,
+    cli_app: typer.Typer,
+    sources_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``sources test --json`` 0 条仍然 ok=True、count=0。"""
+    patch_adapter(monkeypatch, FakeAdapter(articles=[]))
+
+    r = runner.invoke(
+        cli_app,
+        ["test", "x_dotey", "--home", str(sources_home), "--json"],
+    )
+    assert r.exit_code == 0, r.output
+    payload = _json.loads(r.stdout)
+    assert payload["ok"] is True
+    assert payload["count"] == 0
+    assert payload["items"] == []
+
+
+def test_test_cmd_json_adapter_error(
+    runner: CliRunner,
+    cli_app: typer.Typer,
+    sources_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``sources test --json`` adapter 抛 → emit_err schema：``{ok:false, message, details}``（codex P1 修）。
+
+    原行为：emit 信息类 schema ``{id, type, ok:false, count:0, items:[], error: '...'}``
+    与 not_found 路径的 emit_err schema 不一致；codex P1 报告 schema 漂移。
+    现行为：异常路径与 not_found / yaml-missing 路径一致走 emit_err。
+    """
+    patch_adapter(
+        monkeypatch,
+        FakeAdapter(raises=RuntimeError("network down")),
+    )
+
+    r = runner.invoke(
+        cli_app,
+        ["test", "x_dotey", "--home", str(sources_home), "--json"],
+    )
+    assert r.exit_code == 1
+    payload = _json.loads(r.stdout)
+    assert payload["ok"] is False
+    # message 是操作类 schema 的顶层字段
+    assert "RuntimeError" in payload["message"]
+    assert "network down" in payload["message"]
+    # 上下文走 details
+    assert payload["details"]["id"] == "x_dotey"
+    assert payload["details"]["type"] == "rss"
+    assert payload["details"]["error_type"] == "RuntimeError"
+
+
+def test_test_cmd_json_not_found(
+    runner: CliRunner,
+    cli_app: typer.Typer,
+    sources_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``sources test --json`` source id 不存在 → ok=False + exit 1。"""
+    patch_adapter(monkeypatch, FakeAdapter(articles=[]))
+
+    r = runner.invoke(
+        cli_app,
+        ["test", "no_such_id", "--home", str(sources_home), "--json"],
+    )
+    assert r.exit_code == 1
+    payload = _json.loads(r.stdout)
+    assert payload["ok"] is False
+    assert "not found" in payload["message"]

@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from news_collector.commands.sources import _io
-from news_collector.commands.sources._io import (
+from newsbox.commands.sources import _io
+from newsbox.commands.sources._io import (
     SourceIdConflictError,
     SourceKindError,
     find_source,

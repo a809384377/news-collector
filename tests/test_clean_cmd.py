@@ -1,4 +1,4 @@
-"""``news-collector clean`` 命令测试。
+"""``newsbox clean`` 命令测试。
 
 s5-data-views D5 修正：clean 不再做 stdin tty 检测。dry-run 是无害操作，所有
 环境（tty / 非 tty / piped stdin）都直接走 dry-run；真删一律由 ``--yes`` 显
@@ -28,6 +28,7 @@ prompt 交互，--yes 标志本身已是显式确认）。
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -35,7 +36,7 @@ from typing import Any
 import typer
 from typer.testing import CliRunner
 
-from news_collector.commands import clean as clean_mod
+from newsbox.commands import clean as clean_mod
 
 
 # ---- helpers ---------------------------------------------------------------
@@ -240,13 +241,55 @@ def test_clean_dry_run_output_format(populated_raw_db) -> None:
 
     assert result.exit_code == 0
     out = result.output
-    assert "[dry-run] news-collector clean" in out
+    assert "[dry-run] newsbox clean" in out
     assert "DRY RUN" in out
     assert "Articles to delete:" in out
     assert "Articles to keep:" in out
     assert "Total in raw.db:" in out
     assert "cutoff (fetched_at <):" in out
     assert "(--before=2026-04-10)" in out
+
+
+def test_clean_json_dry_run(populated_raw_db) -> None:
+    """--json + dry-run（不带 --yes）：emit_ok message='dry-run'，含 to_delete / to_keep / total。"""
+    db_path, conn = populated_raw_db
+    conn.close()
+    home = db_path.parent
+
+    result = _run(
+        _build_app(),
+        "--home",
+        str(home),
+        "--before",
+        "2026-04-10",
+        "--json",
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["ok"] is True
+    assert payload["message"] == "dry-run"
+    d = payload["details"]
+    assert d["yes"] is False
+    assert d["before"] == "2026-04-10"
+    assert d["to_delete"] == 4
+    assert d["to_keep"] == 16
+    assert d["total"] == 20
+    # dry-run 不应真删
+    assert _count_articles(db_path) == 20
+
+
+def test_clean_json_db_missing(tmp_path: Path) -> None:
+    """--json + raw.db 不存在：ok=false + exit 1。"""
+    home = tmp_path / "home"
+    home.mkdir()
+
+    result = _run(_build_app(), "--home", str(home), "--before", "30d", "--json")
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["ok"] is False
+    assert "raw.db not found" in payload["message"]
 
 
 def test_clean_yes_output_format(populated_raw_db) -> None:
@@ -266,7 +309,7 @@ def test_clean_yes_output_format(populated_raw_db) -> None:
 
     assert result.exit_code == 0
     out = result.output
-    assert "[execute] news-collector clean --yes" in out
+    assert "[execute] newsbox clean --yes" in out
     assert "Deleting" in out
     assert "done" in out
     assert "Running VACUUM" in out

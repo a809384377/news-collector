@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 
-from news_collector.adapters.web_adapter import WebAdapter
+from newsbox.adapters.web_adapter import WebAdapter
 
 CHANGELOG_DIR = Path(__file__).parent / "fixtures" / "web" / "changelog"
 

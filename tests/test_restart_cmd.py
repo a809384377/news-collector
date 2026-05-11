@@ -1,4 +1,4 @@
-"""``news-collector restart`` 命令测试。
+"""``newsbox restart`` 命令测试。
 
 覆盖：
 1. compose_restart 成功 + 容器立即 Up → exit 0 + "rsshub restarted (state=Up)"
@@ -10,14 +10,15 @@
 """
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import typer
 from typer.testing import CliRunner
 
-import news_collector.commands.restart as restart_module
-from news_collector.commands.docker_helpers import DockerError
-from news_collector.commands.restart import restart_cmd
+import newsbox.commands.restart as restart_module
+from newsbox.commands.docker_helpers import DockerError
+from newsbox.commands.restart import restart_cmd
 
 
 # ---- helpers ---------------------------------------------------------------
@@ -41,7 +42,7 @@ def _patch_no_sleep(monkeypatch: Any) -> None:
     """让 ``time.sleep`` 不真等。
 
     restart.py 是 ``import time`` + ``time.sleep(...)``，所以 patch 模块属性
-    ``news_collector.commands.restart.time.sleep``。
+    ``newsbox.commands.restart.time.sleep``。
     """
     monkeypatch.setattr(restart_module.time, "sleep", lambda *a, **kw: None)
 
@@ -126,7 +127,7 @@ def test_restart_warning_when_not_up_after_wait(monkeypatch: Any) -> None:
     assert "[warn]" in result.output
     assert "state=Restarting" in result.output
     assert "after 5s" in result.output
-    assert "news-collector status" in result.output
+    assert "newsbox status" in result.output
     # 应轮询满 5 次（_WAIT_TOTAL_SECONDS）
     assert poll_counts["n"] == restart_module._WAIT_TOTAL_SECONDS
 
@@ -159,6 +160,44 @@ def test_restart_recovers_within_wait(monkeypatch: Any) -> None:
     assert result.exit_code == 0, result.output
     assert "[ok]" in result.output
     assert "rsshub restarted (state=Up)" in result.output
+
+
+def test_restart_json_success(monkeypatch: Any) -> None:
+    """--json 模式 + 容器立即 Up → ok=true，service=rsshub，state=Up。"""
+    _patch_no_sleep(monkeypatch)
+    monkeypatch.setattr(restart_module, "compose_restart", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        restart_module,
+        "container_status",
+        lambda *a, **kw: {"rsshub": "Up", "redis": "Up"},
+    )
+
+    result = _run(_build_app(), "--json")
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["ok"] is True
+    assert payload["message"] == "rsshub restarted"
+    assert payload["details"]["service"] == "rsshub"
+    assert payload["details"]["state"] == "Up"
+
+
+def test_restart_json_compose_error(monkeypatch: Any) -> None:
+    """--json 模式 + compose_restart 抛 DockerError → ok=false + exit 1。"""
+    _patch_no_sleep(monkeypatch)
+
+    def _boom(*args: Any, **kwargs: Any) -> None:
+        raise DockerError("daemon not running")
+
+    monkeypatch.setattr(restart_module, "compose_restart", _boom)
+
+    result = _run(_build_app(), "--json")
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["ok"] is False
+    assert "restart failed" in payload["message"]
+    assert "daemon not running" in payload["message"]
 
 
 def test_restart_tolerates_transient_dockererror_then_recovers(

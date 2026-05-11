@@ -1,7 +1,7 @@
 """``commands/sources/edit_ops.py`` 测试：5 条改类命令端到端覆盖。
 
 策略：
-- ``CliRunner`` 直接打 ``news-collector sources <cmd>``；不传 ``mix_stderr``
+- ``CliRunner`` 直接打 ``newsbox sources <cmd>``；不传 ``mix_stderr``
   （Click 9 已移除该参数，KNOWLEDGE-LOG #17）
 - monkeypatch ``edit_ops._stdin_is_tty`` 控制 tty 分支（不动 sys.stdin，CliRunner
   替换了 sys.stdin 让 monkeypatch sys.stdin.isatty 失效，KNOWLEDGE-LOG #15）
@@ -14,8 +14,8 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from news_collector.cli import app
-from news_collector.commands.sources import edit_ops, _io
+from newsbox.cli import app
+from newsbox.commands.sources import edit_ops, _io
 
 
 SAMPLE_YAML = """\
@@ -51,7 +51,7 @@ web:
 @pytest.fixture
 def home(tmp_path: Path) -> Path:
     """tmp home 目录 + 写入 sample sources.yaml。"""
-    h = tmp_path / ".news-collector"
+    h = tmp_path / ".newsbox"
     h.mkdir()
     (h / "sources.yaml").write_text(SAMPLE_YAML, encoding="utf-8")
     return h
@@ -399,3 +399,176 @@ def test_rename_persists_and_keeps_other_fields(
     assert kind == "web"
     assert item["selector"] == "auto"
     assert item["enabled"] is False
+
+
+# ============================ --json （s9 Step 2） =========================
+
+import json as _json  # noqa: E402
+
+
+def test_disable_json_ok(runner: CliRunner, home: Path) -> None:
+    r = runner.invoke(
+        app, ["sources", "disable", "x_dotey", "--home", str(home), "--json"]
+    )
+    assert r.exit_code == 0, r.output
+    payload = _json.loads(r.stdout)
+    assert payload["ok"] is True
+    assert payload["message"] == "source disabled"
+    assert payload["details"]["id"] == "x_dotey"
+    assert payload["details"]["already"] is False
+    assert payload["details"]["enabled"] is False
+
+
+def test_disable_json_already(runner: CliRunner, home: Path) -> None:
+    """anthropic_news 已经 disabled → already=true。"""
+    r = runner.invoke(
+        app,
+        ["sources", "disable", "anthropic_news", "--home", str(home), "--json"],
+    )
+    assert r.exit_code == 0
+    payload = _json.loads(r.stdout)
+    assert payload["ok"] is True
+    assert payload["details"]["already"] is True
+
+
+def test_disable_json_not_found(runner: CliRunner, home: Path) -> None:
+    r = runner.invoke(
+        app, ["sources", "disable", "ghost", "--home", str(home), "--json"]
+    )
+    assert r.exit_code == 1
+    payload = _json.loads(r.stdout)
+    assert payload["ok"] is False
+    assert "not found" in payload["message"]
+    assert payload["details"]["id"] == "ghost"
+
+
+def test_enable_json_ok(runner: CliRunner, home: Path) -> None:
+    r = runner.invoke(
+        app,
+        ["sources", "enable", "anthropic_news", "--home", str(home), "--json"],
+    )
+    assert r.exit_code == 0, r.output
+    payload = _json.loads(r.stdout)
+    assert payload["ok"] is True
+    assert payload["details"]["already"] is False
+    assert payload["details"]["enabled"] is True
+
+
+def test_enable_json_already(runner: CliRunner, home: Path) -> None:
+    """x_dotey 缺 enabled 字段视为 already enabled。"""
+    r = runner.invoke(
+        app, ["sources", "enable", "x_dotey", "--home", str(home), "--json"]
+    )
+    assert r.exit_code == 0
+    payload = _json.loads(r.stdout)
+    assert payload["details"]["already"] is True
+
+
+def test_remove_json_skips_confirm(
+    runner: CliRunner, home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--json 隐含 --yes：confirm 不应被调用，删除直接执行。"""
+    # 让 _stdin_is_tty=False 来排除 tty 分支（双保险：--json 也走旁路）
+    monkeypatch.setattr(edit_ops, "_stdin_is_tty", lambda: False)
+
+    def should_not_be_called(*args, **kwargs):
+        raise AssertionError("typer.confirm should not be called when --json")
+
+    monkeypatch.setattr("typer.confirm", should_not_be_called)
+
+    r = runner.invoke(
+        app, ["sources", "remove", "x_kepano", "--home", str(home), "--json"]
+    )
+    assert r.exit_code == 0, r.output
+    payload = _json.loads(r.stdout)
+    assert payload["ok"] is True
+    assert payload["message"] == "source removed"
+    assert payload["details"]["id"] == "x_kepano"
+    # 持久化生效
+    data = _read_yaml(home)
+    assert _io.find_source(data, "x_kepano") is None
+
+
+def test_remove_json_not_found(runner: CliRunner, home: Path) -> None:
+    r = runner.invoke(
+        app, ["sources", "remove", "ghost", "--home", str(home), "--json"]
+    )
+    assert r.exit_code == 1
+    payload = _json.loads(r.stdout)
+    assert payload["ok"] is False
+    assert "not found" in payload["message"]
+
+
+def test_edit_json_ok(runner: CliRunner, home: Path) -> None:
+    r = runner.invoke(
+        app,
+        [
+            "sources", "edit", "x_dotey",
+            "--tier", "official_first_party",
+            "--domain", "ai,finance",
+            "--home", str(home),
+            "--json",
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    payload = _json.loads(r.stdout)
+    assert payload["ok"] is True
+    assert payload["details"]["id"] == "x_dotey"
+    assert payload["details"]["changes"]["tier"] == "official_first_party"
+    assert payload["details"]["changes"]["domain"] == ["ai", "finance"]
+
+
+def test_edit_json_no_field(runner: CliRunner, home: Path) -> None:
+    r = runner.invoke(
+        app, ["sources", "edit", "x_dotey", "--home", str(home), "--json"]
+    )
+    assert r.exit_code == 1
+    payload = _json.loads(r.stdout)
+    assert payload["ok"] is False
+    assert "no field to update" in payload["message"]
+
+
+def test_edit_json_not_found(runner: CliRunner, home: Path) -> None:
+    r = runner.invoke(
+        app,
+        [
+            "sources", "edit", "ghost",
+            "--tier", "kol",
+            "--home", str(home),
+            "--json",
+        ],
+    )
+    assert r.exit_code == 1
+    payload = _json.loads(r.stdout)
+    assert payload["ok"] is False
+
+
+def test_rename_json_ok(runner: CliRunner, home: Path) -> None:
+    r = runner.invoke(
+        app,
+        [
+            "sources", "rename", "x_dotey", "x_dotey_v2",
+            "--home", str(home),
+            "--json",
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    payload = _json.loads(r.stdout)
+    assert payload["ok"] is True
+    assert payload["details"]["old_id"] == "x_dotey"
+    assert payload["details"]["new_id"] == "x_dotey_v2"
+
+
+def test_rename_json_conflict(runner: CliRunner, home: Path) -> None:
+    r = runner.invoke(
+        app,
+        [
+            "sources", "rename", "x_dotey", "x_kepano",
+            "--home", str(home),
+            "--json",
+        ],
+    )
+    assert r.exit_code == 1
+    payload = _json.loads(r.stdout)
+    assert payload["ok"] is False
+    assert "conflict" in payload["message"]

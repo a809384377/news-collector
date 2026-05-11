@@ -1,4 +1,4 @@
-"""``news-collector stats`` 命令测试。
+"""``newsbox stats`` 命令测试。
 
 覆盖：
 1. raw.db 不存在 → exit 1 + 错误提示
@@ -24,9 +24,9 @@ import pytest
 import typer
 from typer.testing import CliRunner
 
-from news_collector.commands import stats as stats_module
-from news_collector.commands.stats import stats_cmd
-from news_collector.db import get_conn, init_db
+from newsbox.commands import stats as stats_module
+from newsbox.commands.stats import stats_cmd
+from newsbox.db import get_conn, init_db
 from tests.conftest import ANCHOR
 
 
@@ -72,6 +72,26 @@ def test_stats_db_not_exists(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     assert "raw.db 未找到" in result.output
 
 
+def test_stats_json_db_not_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``--json`` + raw.db 缺失 → stdout JSON ``{ok:false, message, details}`` + exit 1。
+
+    codex P1 修：原行为输出人类 stderr 后 stdout 空，agent jq 解析失败。
+    """
+    home = tmp_path / "home"
+    home.mkdir()
+    _freeze_now(monkeypatch)
+
+    result = _run(_make_app(), "--home", str(home), "--json")
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["ok"] is False
+    assert "raw.db not found" in payload["message"]
+    assert "newsbox setup" in payload["details"]["hint"]
+
+
 def test_stats_empty_db_human_view(
     tmp_raw_db, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -84,7 +104,7 @@ def test_stats_empty_db_human_view(
     assert result.exit_code == 0
     out = result.output
     # 标题
-    assert "== news-collector stats ==" in out
+    assert "== newsbox stats ==" in out
     # 4 块面板都出现
     assert "[Total]" in out
     assert "[Top sources by article count]" in out
@@ -411,3 +431,34 @@ def test_stats_sources_yaml_missing_falls_back_to_zero(
     assert payload["total"]["disabled_sources"] == 0
     # 其它 panel 仍正常
     assert payload["total"]["articles"] == 20
+
+
+def test_stats_json_schema_top_level_keys_unchanged(
+    populated_raw_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """回归保护：s9 Step 2 把 ``json.dumps`` 换成 ``emit`` 后顶层 schema 必须保持原样。
+
+    顶层 4 个 key 是消费方约定，不可改：total / top_sources / last_7_days /
+    by_source_type_domain。
+    """
+    db_path, _conn = populated_raw_db
+    home = db_path.parent
+    _freeze_now(monkeypatch)
+
+    result = _run(_make_app(), "--home", str(home), "--json")
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert set(payload.keys()) == {
+        "total",
+        "top_sources",
+        "last_7_days",
+        "by_source_type_domain",
+    }
+    # total 子字段也固化
+    assert set(payload["total"].keys()) == {
+        "articles",
+        "enabled_sources",
+        "disabled_sources",
+        "earliest_fetched_at",
+        "latest_fetched_at",
+    }

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from news_collector import sources as ns
+from newsbox import sources as ns
 
 
 # ---------- seed_sources ----------
@@ -217,3 +217,46 @@ def test_iter_sources_keeps_kind_specific_fields(tmp_path: Path) -> None:
 def test_iter_sources_missing_file(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         ns.iter_sources(tmp_path / "nope.yaml")
+
+
+# ---------- sources seed --json （s9 Step 2） ----------
+
+import json as _json  # noqa: E402
+
+from typer.testing import CliRunner  # noqa: E402
+
+from newsbox.cli import app as _cli_app  # noqa: E402
+
+
+def test_seed_cmd_json_ok(tmp_path: Path) -> None:
+    """``sources seed --json`` 成功路径输出 ok=True + counts。"""
+    home = tmp_path / ".newsbox"
+    home.mkdir()
+    runner = CliRunner()
+    r = runner.invoke(
+        _cli_app, ["sources", "seed", "--home", str(home), "--json"]
+    )
+    assert r.exit_code == 0, r.output
+    payload = _json.loads(r.stdout)
+    assert payload["ok"] is True
+    assert payload["message"] == "seed loaded"
+    details = payload["details"]
+    assert "path" in details
+    assert details["total"] > 0
+    assert "rss" in details["counts"]
+    assert "web" in details["counts"]
+
+
+def test_seed_cmd_json_already_exists(tmp_path: Path) -> None:
+    """``sources seed --json`` 已存在且无 --force → ok=False + exit 1。"""
+    home = tmp_path / ".newsbox"
+    home.mkdir()
+    (home / "sources.yaml").write_text("placeholder: true\n", encoding="utf-8")
+    runner = CliRunner()
+    r = runner.invoke(
+        _cli_app, ["sources", "seed", "--home", str(home), "--json"]
+    )
+    assert r.exit_code == 1
+    payload = _json.loads(r.stdout)
+    assert payload["ok"] is False
+    assert "seed failed" in payload["message"]

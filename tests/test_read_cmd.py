@@ -1,4 +1,4 @@
-"""``news-collector read`` 命令测试。
+"""``newsbox read`` 命令测试。
 
 覆盖：
 1. raw.db 不存在 → exit 1 + 错误提示
@@ -38,8 +38,9 @@ import pytest
 import typer
 from typer.testing import CliRunner
 
-from news_collector.commands import read as read_module
-from news_collector.commands.read import read_cmd
+from newsbox.commands import read as read_module
+from newsbox.commands.read import read_cmd
+from newsbox.utils import throughput as throughput_module
 from tests.conftest import ANCHOR
 
 
@@ -435,3 +436,179 @@ def test_read_json_empty_outputs_no_lines(tmp_raw_db) -> None:
     assert result.exit_code == 0
     lines = [ln for ln in result.output.splitlines() if ln.strip()]
     assert lines == []
+
+
+# ---- 阈值软阻断（s9 Step 3 / D4） ---------------------------------------
+
+
+def _patch_count(monkeypatch: pytest.MonkeyPatch, predicted: int) -> None:
+    """monkeypatch read 模块的 ``count_articles_raw`` 返回固定预估值。
+
+    避免插 10k+ 行测试数据；预估值由 monkeypatch 决定，gate 决策可独立验证。
+    """
+    monkeypatch.setattr(
+        read_module, "count_articles_raw", lambda *a, **kw: predicted
+    )
+
+
+def test_read_below_threshold_emits_no_warn(populated_raw_db) -> None:
+    """20 行 < 默认阈值 10000 → 无 warn，正常输出。"""
+    db_path, _conn = populated_raw_db
+    home = db_path.parent
+
+    result = _run(
+        _make_app(),
+        "--home",
+        str(home),
+        "--since",
+        _far_future_since(),
+        "--limit",
+        "0",
+    )
+
+    assert result.exit_code == 0
+    assert "[warn]" not in result.output
+    assert "(19 articles" in result.output  # 19 ai-domain 行（不含单 finance）
+
+
+def test_read_above_threshold_aborts_when_user_declines(
+    populated_raw_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """超阈值 + tty + confirm 答 no → abort + exit 1 + stderr 含 SDK snippet。"""
+    _patch_count(monkeypatch, 99999)
+    monkeypatch.setattr(throughput_module, "_stdin_is_tty", lambda: True)
+
+    db_path, _conn = populated_raw_db
+    home = db_path.parent
+
+    runner = CliRunner()
+    # 答 no（typer.confirm default=False，直接回车也是 no）
+    result = runner.invoke(
+        _make_app(),
+        ["--home", str(home), "--since", _far_future_since()],
+        input="n\n",
+    )
+
+    assert result.exit_code == 1
+    assert "[warn]" in result.output
+    assert "99,999" in result.output  # 数字千分位格式化
+    assert "from newsbox.sdk import read_raw" in result.output  # SDK snippet
+    # 拒绝后不应输出表头（未走到表格渲染段）
+    assert "fetched_at" not in result.output or "[warn]" in result.output
+
+
+def test_read_above_threshold_with_yes_continues(
+    populated_raw_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """超阈值 + --yes → warn 仍出，但继续执行；exit 0。"""
+    _patch_count(monkeypatch, 99999)
+    # --yes 路径不进 tty 分支，但保险起见 patch 让结果与 tty 状态无关
+    monkeypatch.setattr(throughput_module, "_stdin_is_tty", lambda: False)
+
+    db_path, _conn = populated_raw_db
+    home = db_path.parent
+
+    result = _run(
+        _make_app(),
+        "--home",
+        str(home),
+        "--since",
+        _far_future_since(),
+        "--limit",
+        "0",
+        "--yes",
+    )
+
+    assert result.exit_code == 0
+    assert "[warn]" in result.output
+    assert "(19 articles" in result.output  # 继续到表格渲染
+
+
+def test_read_above_threshold_with_json_continues_clean_stdout(
+    populated_raw_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """超阈值 + --json → 等价 --yes，warn 走 stderr，NDJSON 仍正确出来。"""
+    _patch_count(monkeypatch, 99999)
+    monkeypatch.setattr(throughput_module, "_stdin_is_tty", lambda: False)
+
+    db_path, _conn = populated_raw_db
+    home = db_path.parent
+
+    result = _run(
+        _make_app(),
+        "--home",
+        str(home),
+        "--since",
+        _far_future_since(),
+        "--limit",
+        "0",
+        "--json",
+    )
+
+    assert result.exit_code == 0
+    assert "[warn]" in result.output
+
+    # 从混合输出里提取合法 JSON 行（warn 文案不是 JSON，会被 skip）
+    json_lines: list[dict[str, Any]] = []
+    for ln in result.output.splitlines():
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            json_lines.append(json.loads(ln))
+        except json.JSONDecodeError:
+            continue
+    assert len(json_lines) == 19  # 19 行 ai-domain
+
+
+def test_read_above_threshold_non_tty_aborts_with_guidance(
+    populated_raw_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """超阈值 + 非 tty + 无 --yes + 无 --json → abort + 引导文案。"""
+    _patch_count(monkeypatch, 99999)
+    monkeypatch.setattr(throughput_module, "_stdin_is_tty", lambda: False)
+
+    db_path, _conn = populated_raw_db
+    home = db_path.parent
+
+    result = _run(
+        _make_app(),
+        "--home",
+        str(home),
+        "--since",
+        _far_future_since(),
+    )
+
+    assert result.exit_code == 1
+    assert "[warn]" in result.output
+    assert "非交互环境" in result.output
+    assert "--yes" in result.output
+
+
+def test_read_threshold_overridable_via_config_yaml(
+    populated_raw_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``thresholds.cli_read_warn`` 在 ~/.newsbox/config.yaml 中可覆盖默认 10000。"""
+    db_path, _conn = populated_raw_db
+    home = db_path.parent
+    # 把阈值降到 5（< 实际 19 行）→ warn 必触发
+    (home / "config.yaml").write_text(
+        "thresholds:\n  cli_read_warn: 5\n", encoding="utf-8"
+    )
+    # 用 --yes 跳过 confirm，单独验阈值生效
+    monkeypatch.setattr(throughput_module, "_stdin_is_tty", lambda: False)
+
+    result = _run(
+        _make_app(),
+        "--home",
+        str(home),
+        "--since",
+        _far_future_since(),
+        "--limit",
+        "0",
+        "--yes",
+    )
+
+    assert result.exit_code == 0
+    assert "[warn]" in result.output
+    assert ">5 阈值" in result.output  # 千分位下 5 不分隔

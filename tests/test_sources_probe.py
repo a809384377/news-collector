@@ -8,7 +8,7 @@ from typing import Callable
 import httpx
 import pytest
 
-from news_collector.commands.sources._probe import (
+from newsbox.commands.sources._probe import (
     ProbeResult,
     probe,
     suggest_id,

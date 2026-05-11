@@ -27,8 +27,8 @@ from pathlib import Path
 
 import pytest
 
-from news_collector.db import get_conn, init_db
-from news_collector.sdk import ArticleRaw, read_raw
+from newsbox.db import get_conn, init_db
+from newsbox.sdk import ArticleRaw, read_raw
 
 
 # ---- helpers ---------------------------------------------------------------
@@ -324,7 +324,7 @@ def test_content_hash_exposed_and_propagated(empty_db: Path) -> None:
 def test_db_path_override_does_not_touch_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """传入 db_path 时不应去碰 ~/.news-collector/raw.db。"""
+    """传入 db_path 时不应去碰 ~/.newsbox/raw.db。"""
     # 把 home 重定向到 tmp，确保即使去查也不会命中真实数据
     fake_home = tmp_path / "home"
     fake_home.mkdir()
@@ -343,8 +343,8 @@ def test_db_path_override_does_not_touch_default(
     got = list(read_raw(db_path=db_path))
     assert [a.external_id for a in got] == ["custom-1"]
 
-    # 默认路径 ~/.news-collector/raw.db 不应存在（因为我们没创建）
-    default_db = fake_home / ".news-collector" / "raw.db"
+    # 默认路径 ~/.newsbox/raw.db 不应存在（因为我们没创建）
+    default_db = fake_home / ".newsbox" / "raw.db"
     assert not default_db.exists()
 
 

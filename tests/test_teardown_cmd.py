@@ -1,4 +1,4 @@
-"""``news-collector teardown`` 命令测试。
+"""``newsbox teardown`` 命令测试。
 
 覆盖：
 1. compose_down 成功 → exit 0 + 友好提示（含 "containers stopped" + "data preserved"）
@@ -19,9 +19,9 @@ from typer.testing import CliRunner
 
 # 注意：别名不能用 ``td_mod`` —— pytest 会把模块级 ``td_mod``
 # 当成 xunit-style teardown hook 去调，导致 AttributeError。改用 ``td_mod``。
-import news_collector.commands.teardown as td_mod
-from news_collector.commands.docker_helpers import DockerError
-from news_collector.commands.teardown import teardown_cmd
+import newsbox.commands.teardown as td_mod
+from newsbox.commands.docker_helpers import DockerError
+from newsbox.commands.teardown import teardown_cmd
 
 
 # ---- helpers ---------------------------------------------------------------
@@ -102,3 +102,40 @@ def test_teardown_called_compose_down_once(
 
     assert result.exit_code == 0
     assert len(calls) == 1
+
+
+def test_teardown_json_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``--json`` 成功 → ``{ok: true, message, details: {home}}``。"""
+    import json as _json
+
+    monkeypatch.setattr(td_mod, "compose_down", lambda *a, **kw: None)
+
+    result = _run(_build_app(), "--home", str(tmp_path), "--json")
+
+    assert result.exit_code == 0
+    parsed = _json.loads(result.output)
+    assert parsed["ok"] is True
+    assert "containers stopped" in parsed["message"]
+    assert parsed["details"]["home"] == str(tmp_path)
+
+
+def test_teardown_json_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``--json`` 失败 → ``{ok: false, message}`` + exit 1。"""
+    import json as _json
+
+    def fake_compose_down(*a: Any, **kw: Any) -> None:
+        raise DockerError("docker daemon down")
+
+    monkeypatch.setattr(td_mod, "compose_down", fake_compose_down)
+
+    result = _run(_build_app(), "--home", str(tmp_path), "--json")
+
+    assert result.exit_code == 1
+    parsed = _json.loads(result.output)
+    assert parsed["ok"] is False
+    assert "teardown failed" in parsed["message"]
+    assert "docker daemon down" in parsed["message"]

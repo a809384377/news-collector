@@ -1,4 +1,4 @@
-"""``news-collector state`` 命令测试。
+"""``newsbox state`` 命令测试。
 
 覆盖：
 1. raw.db 不存在 → exit 1 + 错误提示
@@ -17,8 +17,8 @@ from typing import Any
 import typer
 from typer.testing import CliRunner
 
-from news_collector.commands.state import state_cmd
-from news_collector.db import get_conn, init_db
+from newsbox.commands.state import state_cmd
+from newsbox.db import get_conn, init_db
 
 
 # ---- helpers ---------------------------------------------------------------
@@ -250,6 +250,79 @@ def test_state_failures_summary_line(tmp_path: Path) -> None:
     assert "bad_src" in out
     assert "httpx.ReadTimeout" in out
     assert "(2 sources, 1 with failures)" in out
+
+
+def test_state_json_db_not_exists(tmp_path: Path) -> None:
+    """``--json`` + raw.db 缺失 → ``{ok: false, message, details: {hint}}`` + exit 1。"""
+    import json as _json
+
+    home = tmp_path / "home"
+    home.mkdir()
+
+    result = _run(_make_app(), "--home", str(home), "--json")
+
+    assert result.exit_code == 1
+    parsed = _json.loads(result.output)
+    assert parsed["ok"] is False
+    assert "raw.db not found" in parsed["message"]
+    assert "newsbox setup" in parsed["details"]["hint"]
+
+
+def test_state_json_payload_structure(tmp_path: Path) -> None:
+    """``--json`` happy path → ``{sources: [...], total, failures}`` schema 完整。"""
+    import json as _json
+
+    home = tmp_path / "home"
+    home.mkdir()
+    db_path = home / "raw.db"
+    _seed_state(
+        db_path,
+        [
+            {
+                "source_type": "rss",
+                "source_id": "ok_src",
+                "last_fetch_at": "2026-05-09T10:00:00",
+                "last_error": None,
+                "consecutive_failures": 0,
+            },
+            {
+                "source_type": "web",
+                "source_id": "bad_src",
+                "last_fetch_at": "2026-05-09T10:01:00",
+                "last_error": "httpx.ReadTimeout",
+                "consecutive_failures": 3,
+            },
+        ],
+    )
+
+    result = _run(_make_app(), "--home", str(home), "--json")
+
+    assert result.exit_code == 0
+    parsed = _json.loads(result.output)
+    assert parsed["total"] == 2
+    assert parsed["failures"] == 1
+    assert len(parsed["sources"]) == 2
+    # JSON 模式保留原始 ISO 字符串（不做 19 字符截断）
+    bad = next(s for s in parsed["sources"] if s["source_id"] == "bad_src")
+    assert bad["last_fetch_at"] == "2026-05-09T10:01:00"
+    assert bad["last_error"] == "httpx.ReadTimeout"
+    assert bad["consecutive_failures"] == 3
+
+
+def test_state_json_empty(tmp_path: Path) -> None:
+    """``--json`` + 空表 → ``{sources: [], total: 0, failures: 0}`` + exit 0。"""
+    import json as _json
+
+    home = tmp_path / "home"
+    home.mkdir()
+    db_path = home / "raw.db"
+    init_db(db_path)
+
+    result = _run(_make_app(), "--home", str(home), "--json")
+
+    assert result.exit_code == 0
+    parsed = _json.loads(result.output)
+    assert parsed == {"sources": [], "total": 0, "failures": 0}
 
 
 def test_state_long_error_truncated(tmp_path: Path) -> None:

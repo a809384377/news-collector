@@ -1,4 +1,4 @@
-# news-collector 产品对齐文档
+# newsbox 产品对齐文档
 
 > **生成背景**：2026-05-09 产品对齐对话产物。
 > 采集层独立仓库初始化完成后（commit 9b3bb7f）发现前期缺乏"产品原型阶段"对齐——
@@ -244,11 +244,11 @@ CLI 内部自动管 Docker。用户视角：
 
 | 用户在做什么 | 用户敲什么 | 内部发生什么 |
 |---|---|---|
-| 装机 | `news-collector setup` | 启容器 / 建库 / 铺信源 / 引导填 token |
-| 想抓数据 | `news-collector fetch` | 检测容器，没起就自动起，再抓 |
-| 想看一眼 | `news-collector read --since=24h` | 直接 SQL 查 raw.db（CLI 调 SDK） |
-| 系统不对劲 | `news-collector doctor` | 全面诊断 |
-| 关机 | `news-collector teardown` | 停容器，数据保留 |
+| 装机 | `newsbox setup` | 启容器 / 建库 / 铺信源 / 引导填 token |
+| 想抓数据 | `newsbox fetch` | 检测容器，没起就自动起，再抓 |
+| 想看一眼 | `newsbox read --since=24h` | 直接 SQL 查 raw.db（CLI 调 SDK） |
+| 系统不对劲 | `newsbox doctor` | 全面诊断 |
+| 关机 | `newsbox teardown` | 停容器，数据保留 |
 
 **8 步装机变 1 步**。Docker 是黑盒，接手者不需要懂。
 

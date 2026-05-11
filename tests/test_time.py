@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from news_collector.utils.time import parse_since
+from newsbox.utils.time import parse_since
 
 
 _NOW = datetime(2026, 5, 8, 12, 0, 0, tzinfo=timezone.utc)

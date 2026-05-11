@@ -16,8 +16,8 @@ from typing import Any
 import pytest
 from loguru import logger
 
-from news_collector import logging_setup
-from news_collector.config import LoggingConfig
+from newsbox import logging_setup
+from newsbox.config import LoggingConfig
 
 
 @pytest.fixture(autouse=True)
@@ -29,7 +29,7 @@ def _reset_logging_setup_state() -> None:
 
 
 def _make_cfg(
-    file: str = "logs/news-collector.log",
+    file: str = "logs/newsbox.log",
     level: str = "info",
     rotation: str = "daily",
     retention_days: int = 30,
@@ -43,7 +43,7 @@ def _make_cfg(
 
 
 def test_init_logging_writes_to_file(tmp_path: Path) -> None:
-    """init_logging 之后 logger.info 落盘到 <home>/logs/news-collector.log。"""
+    """init_logging 之后 logger.info 落盘到 <home>/logs/newsbox.log。"""
     (tmp_path / "logs").mkdir(parents=True, exist_ok=True)
     cfg = _make_cfg()
 
@@ -54,7 +54,7 @@ def test_init_logging_writes_to_file(tmp_path: Path) -> None:
     # loguru 同步 sink 不需要 flush，但保险显式 complete 一下
     logger.complete()
 
-    log_file = tmp_path / "logs" / "news-collector.log"
+    log_file = tmp_path / "logs" / "newsbox.log"
     assert log_file.is_file()
     assert "hello-from-test" in log_file.read_text(encoding="utf-8")
 
@@ -73,7 +73,7 @@ def test_init_logging_is_idempotent(tmp_path: Path) -> None:
     logger.info("only-once")
     logger.complete()
 
-    log_file = tmp_path / "logs" / "news-collector.log"
+    log_file = tmp_path / "logs" / "newsbox.log"
     content = log_file.read_text(encoding="utf-8")
     # 同一行 only-once 只应出现 1 次（如果重复挂 sink，会出现 2-3 次）
     assert content.count("only-once") == 1
@@ -94,7 +94,7 @@ def test_init_logging_force_resets_sink(tmp_path: Path) -> None:
     logger.info("after-force")
     logger.complete()
 
-    log_file = tmp_path / "logs" / "news-collector.log"
+    log_file = tmp_path / "logs" / "newsbox.log"
     content = log_file.read_text(encoding="utf-8")
     # force 重挂只剩 1 个 file sink，所以日志只 1 行
     assert content.count("after-force") == 1
@@ -118,7 +118,7 @@ def test_init_logging_passes_correct_kwargs(
     monkeypatch.setattr(logger, "add", fake_add)
 
     cfg = _make_cfg(
-        file="logs/news-collector.log",
+        file="logs/newsbox.log",
         level="warning",
         rotation="daily",
         retention_days=7,
@@ -133,7 +133,7 @@ def test_init_logging_passes_correct_kwargs(
     # sink 应是绝对路径字符串
     sink_path = Path(captured["sink"])
     assert sink_path.is_absolute()
-    assert sink_path == tmp_path / "logs" / "news-collector.log"
+    assert sink_path == tmp_path / "logs" / "newsbox.log"
 
 
 def test_init_logging_expanduser_for_tilde(
@@ -149,7 +149,7 @@ def test_init_logging_expanduser_for_tilde(
 
     monkeypatch.setattr(logger, "add", fake_add)
 
-    cfg = _make_cfg(file="~/.news-collector/logs/news-collector.log")
+    cfg = _make_cfg(file="~/.newsbox/logs/newsbox.log")
     logging_setup.init_logging(cfg, home=tmp_path)
 
     sink = captured["sink"]
@@ -177,12 +177,12 @@ def test_init_logging_translate_unknown_rotation_passthrough(
 
 def test_init_logging_creates_logs_dir(tmp_path: Path) -> None:
     """logs 目录不存在时也能正常初始化（防御性 mkdir）。"""
-    cfg = _make_cfg(file="logs/news-collector.log")
+    cfg = _make_cfg(file="logs/newsbox.log")
     # 注意：tmp_path/logs 不预创建
     logging_setup.init_logging(cfg, home=tmp_path)
 
     logger.info("dir-created")
     logger.complete()
 
-    log_file = tmp_path / "logs" / "news-collector.log"
+    log_file = tmp_path / "logs" / "newsbox.log"
     assert log_file.is_file()

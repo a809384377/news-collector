@@ -1,6 +1,6 @@
 # 安装指南
 
-本项目以 PyPI 包 `raw-news-collector` 名义对外分发，CLI 命令名为 `news-collector`，Python module 名为 `news_collector`（三者独立设计，详见 README §安装）。
+本项目以 PyPI 包 `newsbox` 名义对外分发，CLI 命令名为 `newsbox`，Python module 名为 `newsbox`（三者独立设计，详见 README §安装）。
 
 本文档面向**国内开发者**说明：① 推荐安装路径 ② 国内 PyPI 镜像加速配置（uv 全局，不污染本项目）。
 
@@ -10,8 +10,8 @@
 
 | 你是谁 | 推荐方式 |
 |---|---|
-| 想跑 collector 抓数据，不写 Python 代码 | `pipx install raw-news-collector` |
-| 下游消费方（news-radar-ai 等），要 `import news_collector.sdk` | 在你的项目 `uv add raw-news-collector`；本仓库未发布前用 `uv pip install -e ../news-collector` editable |
+| 想跑 collector 抓数据，不写 Python 代码 | `pipx install newsbox` |
+| 下游消费方（news-radar-ai 等），要 `import newsbox.sdk` | 在你的项目 `uv add newsbox`；本仓库未发布前用 `uv pip install -e ../newsbox` editable |
 | 想改 collector 源码 | `git clone` + `uv sync` |
 
 完整步骤见 README。
@@ -74,7 +74,7 @@ index-url = https://pypi.tuna.tsinghua.edu.cn/simple/
 extra-index-url = https://pypi.org/simple/
 ```
 
-之后 `pipx install raw-news-collector` 会经清华下载。
+之后 `pipx install newsbox` 会经清华下载。
 
 ---
 

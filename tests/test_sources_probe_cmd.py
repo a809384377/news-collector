@@ -1,4 +1,4 @@
-"""``news-collector sources probe`` 命令测试。
+"""``newsbox sources probe`` 命令测试。
 
 s4-sources-management Step 7 subagent C 产出。
 
@@ -20,8 +20,8 @@ import pytest
 import typer
 from typer.testing import CliRunner
 
-from news_collector.commands.sources._probe import ProbeResult
-from news_collector.commands.sources.probe_cmd import sources_probe_cmd
+from newsbox.commands.sources._probe import ProbeResult
+from newsbox.commands.sources.probe_cmd import sources_probe_cmd
 
 
 # --------------------------- fixtures ---------------------------------------
@@ -74,7 +74,7 @@ def fake_probe_factory(monkeypatch: pytest.MonkeyPatch):
             )
 
         monkeypatch.setattr(
-            "news_collector.commands.sources.probe_cmd.probe",
+            "newsbox.commands.sources.probe_cmd.probe",
             fake_probe,
         )
         return fake_probe
@@ -370,3 +370,118 @@ def test_from_file_path_not_exist(
     assert result.exit_code != 0
     err = (result.stderr or "") + result.output
     assert "不存在" in err or "not" in err.lower()
+
+
+# ============================ --json （s9 Step 2） =========================
+
+import json as _json  # noqa: E402
+
+
+def test_probe_json_single_ok(runner, make_app, fake_probe_factory) -> None:
+    """``sources probe <url> --json`` 单 url reachable。"""
+    target = "https://www.anthropic.com/news"
+    fake_probe_factory({target: _ok_result(target)})
+
+    app = make_app()
+    r = runner.invoke(app, ["probe", target, "--json"])
+    assert r.exit_code == 0, r.output
+    payload = _json.loads(r.stdout)
+    assert payload["url"] == target
+    assert payload["reachable"] is True
+    assert payload["status_code"] == 200
+    assert payload["source_type"] == "web"
+    assert payload["suggested_id"] == "anthropic_news"
+    assert payload["sample_title"] == "News - Anthropic"
+    assert payload["error"] is None
+
+
+def test_probe_json_single_error(runner, make_app, fake_probe_factory) -> None:
+    """``sources probe <url> --json`` 单 url 404 → reachable=False + exit 1。"""
+    target = "https://example.com/dead"
+    fake_probe_factory({
+        target: ProbeResult(
+            url=target,
+            reachable=False,
+            status_code=404,
+            source_type=None,
+            suggested_id="example_dead",
+            sample_title=None,
+            error="HTTP 404",
+        )
+    })
+
+    app = make_app()
+    r = runner.invoke(app, ["probe", target, "--json"])
+    assert r.exit_code == 1
+    payload = _json.loads(r.stdout)
+    assert payload["reachable"] is False
+    assert payload["status_code"] == 404
+    assert payload["error"] == "HTTP 404"
+
+
+def test_probe_json_batch(
+    runner, make_app, fake_probe_factory, tmp_path: Path
+) -> None:
+    """``sources probe --from-file ... --json`` 批量聚合。"""
+    urls = [
+        "https://ok.example/feed",
+        "https://dead.example/404",
+    ]
+    fake_probe_factory({
+        urls[0]: ProbeResult(
+            url=urls[0],
+            reachable=True,
+            status_code=200,
+            source_type="rss",
+            suggested_id="ok_example",
+            sample_title="OK feed",
+            error=None,
+        ),
+        urls[1]: ProbeResult(
+            url=urls[1],
+            reachable=False,
+            status_code=404,
+            source_type=None,
+            suggested_id="dead_example_404",
+            sample_title=None,
+            error="HTTP 404",
+        ),
+    })
+
+    list_file = tmp_path / "urls.txt"
+    list_file.write_text("\n".join(urls) + "\n", encoding="utf-8")
+
+    app = make_app()
+    r = runner.invoke(app, ["probe", "--from-file", str(list_file), "--json"])
+    # 任一不可达 → exit 1
+    assert r.exit_code == 1
+    payload = _json.loads(r.stdout)
+    assert payload["total"] == 2
+    assert payload["reachable"] == 1
+    assert payload["unreachable"] == 1
+    assert len(payload["results"]) == 2
+
+
+def test_probe_json_mutually_exclusive_neither(runner, make_app) -> None:
+    """``probe --json``（无 url 无 --from-file）→ emit_err + exit 2（codex P1 修）。"""
+    app = make_app()
+    r = runner.invoke(app, ["probe", "--json"])
+    assert r.exit_code == 2
+    payload = _json.loads(r.stdout)
+    assert payload["ok"] is False
+    assert "must pass" in payload["message"]
+
+
+def test_probe_json_mutually_exclusive_both(runner, make_app, tmp_path: Path) -> None:
+    """``probe <url> --from-file=... --json`` → emit_err + exit 2（codex P1 修）。"""
+    list_file = tmp_path / "urls.txt"
+    list_file.write_text("https://x.com\n", encoding="utf-8")
+    app = make_app()
+    r = runner.invoke(
+        app, ["probe", "https://x.com", "--from-file", str(list_file), "--json"]
+    )
+    assert r.exit_code == 2
+    payload = _json.loads(r.stdout)
+    assert payload["ok"] is False
+    assert "互斥" in payload["message"]
+    assert payload["details"]["url"] == "https://x.com"

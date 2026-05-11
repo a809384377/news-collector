@@ -17,8 +17,8 @@ from pathlib import Path
 
 import pytest
 
-from news_collector import db as db_module
-from news_collector.db import apply_migrations, get_conn, init_db
+from newsbox import db as db_module
+from newsbox.db import apply_migrations, get_conn, init_db
 
 
 # ---- helpers ---------------------------------------------------------------

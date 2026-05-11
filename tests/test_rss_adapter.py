@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 
-from news_collector.adapters.rss_adapter import RSSAdapter
+from newsbox.adapters.rss_adapter import RSSAdapter
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "rss"
 
@@ -169,8 +169,8 @@ def test_user_agent_is_set() -> None:
     # call.args 是位置参数 (url,)；call.kwargs 含 headers
     assert call is not None
     headers = call.kwargs.get("headers", {})
-    assert headers.get("User-Agent") == "news-collector/0.1.0", (
-        f"expected User-Agent=news-collector/0.1.0, got headers={headers!r}"
+    assert headers.get("User-Agent") == "newsbox/0.1.0", (
+        f"expected User-Agent=newsbox/0.1.0, got headers={headers!r}"
     )
     # 同时验证 url 与 follow_redirects
     assert call.kwargs.get("follow_redirects") is True

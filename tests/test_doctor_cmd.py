@@ -11,15 +11,16 @@ hook 名字坑）。本文件用 ``doc_mod``。
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
 import typer
 from typer.testing import CliRunner
 
-from news_collector.commands import doctor as doc_mod
-from news_collector.commands.docker_helpers import DockerError
-from news_collector.db import init_db
+from newsbox.commands import doctor as doc_mod
+from newsbox.commands.docker_helpers import DockerError
+from newsbox.db import init_db
 
 
 # ---- helpers ---------------------------------------------------------------
@@ -241,6 +242,62 @@ def test_doctor_sample_fetch_timeout_warns(
 
     assert result.exit_code == 0
     assert "timeout" in result.output
+
+
+def test_doctor_json_all_green(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--json 模式 + 全 OK：emit 单块 JSON，ok=true，checks 数组含各 section 名。"""
+    home = tmp_path / "home"
+    _seed_healthy_home(home)
+    _mock_docker_healthy(monkeypatch)
+    _mock_sample_adapters_ok(monkeypatch, count=3)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        _build_app(), ["doctor", "--home", str(home), "--json"]
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["ok"] is True
+    assert payload["home"] == str(home)
+    checks = payload["checks"]
+    # 每条 check 应有 name 在 {docker, config, database, sample_fetch}
+    section_names = {c["name"] for c in checks}
+    assert section_names == {"docker", "config", "database", "sample_fetch"}
+    # 全部 level 都该是 ok
+    assert all(c["level"] == "ok" for c in checks), checks
+    # 字段齐全
+    for c in checks:
+        assert "name" in c and "level" in c and "message" in c and "fix" in c
+
+
+def test_doctor_json_db_missing_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--json 模式 + raw.db 缺失：ok=false + exit 1，仍 emit 完整 JSON。"""
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".env").write_text("TWITTER_AUTH_TOKEN=tk\n")
+    (home / "sources.yaml").write_text("rss: []\nweb: []\n")
+    _mock_docker_healthy(monkeypatch)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        _build_app(), ["doctor", "--home", str(home), "--json"]
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["ok"] is False
+    # 至少有一条 database fail，且 message 含 raw.db not found
+    db_fails = [
+        c for c in payload["checks"]
+        if c["name"] == "database" and c["level"] == "fail"
+    ]
+    assert db_fails, payload["checks"]
+    assert any("raw.db not found" in c["message"] for c in db_fails)
 
 
 def test_doctor_docker_query_fail(

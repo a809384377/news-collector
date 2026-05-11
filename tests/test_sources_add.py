@@ -17,8 +17,8 @@ import pytest
 import typer
 from typer.testing import CliRunner
 
-from news_collector.commands.sources import _io, add_cmd
-from news_collector.commands.sources._probe import ProbeResult
+from newsbox.commands.sources import _io, add_cmd
+from newsbox.commands.sources._probe import ProbeResult
 
 
 # ---------------------------------------------------------------- helpers
@@ -86,7 +86,7 @@ web:
 
 @pytest.fixture
 def home(tmp_path: Path) -> Path:
-    h = tmp_path / ".news-collector"
+    h = tmp_path / ".newsbox"
     h.mkdir()
     (h / "sources.yaml").write_text(SAMPLE_YAML, encoding="utf-8")
     return h
@@ -95,7 +95,7 @@ def home(tmp_path: Path) -> Path:
 @pytest.fixture
 def empty_home(tmp_path: Path) -> Path:
     """无 sources.yaml 的 home（首次录入场景）。"""
-    h = tmp_path / ".news-collector"
+    h = tmp_path / ".newsbox"
     h.mkdir()
     return h
 
@@ -546,3 +546,181 @@ def test_neither_url_nor_from_file(
     r = runner.invoke(app, ["add", "--home", str(home)])
     assert r.exit_code != 0
     assert "either url or --from-file" in (r.stderr + r.output)
+
+
+# ============================ --json （s9 Step 2） =========================
+
+import json as _json  # noqa: E402
+
+
+def test_add_json_missing_required_skips_prompt(
+    runner: CliRunner, home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``add <url> --json`` 不带任何字段 → ok=False + exit 2。
+
+    关键：prompt 必须被跳过（agent 自动化场景下不能阻塞读 stdin）。
+    """
+
+    def should_not_be_called(*args, **kwargs):
+        raise AssertionError("typer.prompt should not be called when --json")
+
+    monkeypatch.setattr("typer.prompt", should_not_be_called)
+    monkeypatch.setattr("typer.confirm", should_not_be_called)
+    # probe 也不该被调（形态 A 入口在 --json 下直接 emit_err 退出）
+    monkeypatch.setattr(
+        add_cmd, "_run_probe",
+        lambda url: (_ for _ in ()).throw(AssertionError("probe should not run")),
+    )
+
+    app = make_app()
+    r = runner.invoke(
+        app,
+        ["add", "https://newsite.example.com/blog", "--home", str(home), "--json"],
+    )
+    assert r.exit_code == 2, r.output
+    payload = _json.loads(r.stdout)
+    assert payload["ok"] is False
+    assert "missing required" in payload["message"]
+    assert "tier" in payload["details"]["required_fields"]
+
+
+def test_add_json_form_b_full_fields_ok(
+    runner: CliRunner, home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``add <url> --tier=... --type=... --json``：完整字段 → ok=True。"""
+
+    def should_not_run_probe(url):
+        raise AssertionError("probe should not run when --type is given")
+
+    monkeypatch.setattr(add_cmd, "_run_probe", should_not_run_probe)
+
+    def should_not_be_called(*args, **kwargs):
+        raise AssertionError("prompt/confirm should not run when --json")
+
+    monkeypatch.setattr("typer.prompt", should_not_be_called)
+    monkeypatch.setattr("typer.confirm", should_not_be_called)
+
+    app = make_app()
+    r = runner.invoke(
+        app,
+        [
+            "add", "https://newhost.example.com/feed.xml",
+            "--tier", "kol",
+            "--domain", "ai,finance",
+            "--id", "newhost_feed",
+            "--type", "rss",
+            "--home", str(home),
+            "--json",
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    payload = _json.loads(r.stdout)
+    assert payload["ok"] is True
+    assert payload["message"] == "source added"
+    assert payload["details"]["id"] == "newhost_feed"
+    assert payload["details"]["type"] == "rss"
+    assert payload["details"]["tier"] == "kol"
+    assert payload["details"]["domain"] == ["ai", "finance"]
+    # 持久化生效
+    data = _read_yaml(home)
+    assert _io.find_source(data, "newhost_feed") is not None
+
+
+def test_add_json_form_b_url_duplicate(
+    runner: CliRunner, home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``add --json`` 形态 B：url 已被占 → ok=False + exit 1。"""
+
+    def should_not_run_probe(url):
+        raise AssertionError("probe should not run when --type is given")
+
+    monkeypatch.setattr(add_cmd, "_run_probe", should_not_run_probe)
+
+    app = make_app()
+    r = runner.invoke(
+        app,
+        [
+            "add", "https://www.anthropic.com/news",  # 已被 anthropic_news 占
+            "--tier", "kol",
+            "--id", "anthropic_dup",
+            "--type", "web",
+            "--home", str(home),
+            "--json",
+        ],
+    )
+    assert r.exit_code == 1
+    payload = _json.loads(r.stdout)
+    assert payload["ok"] is False
+    assert "url already present" in payload["message"]
+    assert payload["details"]["occupied_by"] == "anthropic_news"
+
+
+def test_add_json_batch(
+    runner: CliRunner,
+    empty_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """``add --from-file ... --json`` 聚合输出。"""
+    probes = {
+        "https://a.example.com/news": _make_probe_result(
+            url="https://a.example.com/news",
+            source_type="web",
+            suggested_id="a_news",
+        ),
+        "https://b.example.com/feed": _make_probe_result(
+            url="https://b.example.com/feed",
+            source_type="rss",
+            suggested_id="b_feed",
+        ),
+    }
+    monkeypatch.setattr(add_cmd, "_run_probe", lambda url: probes[url])
+
+    batch = tmp_path / "urls.txt"
+    batch.write_text(
+        "https://a.example.com/news\n"
+        "https://b.example.com/feed kol ai b_feed\n",
+        encoding="utf-8",
+    )
+
+    app = make_app()
+    r = runner.invoke(
+        app,
+        [
+            "add", "--from-file", str(batch),
+            "--home", str(empty_home),
+            "--json",
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    payload = _json.loads(r.stdout)
+    assert payload["ok"] is True
+    assert payload["details"]["added"] == 2
+    assert payload["details"]["skipped"] == 0
+    assert payload["details"]["errored"] == 0
+    assert len(payload["details"]["items"]) == 2
+    statuses = {item["status"] for item in payload["details"]["items"]}
+    assert statuses == {"added"}
+
+
+def test_add_json_mutually_exclusive(
+    runner: CliRunner, home: Path, tmp_path: Path
+) -> None:
+    """``add <url> --from-file ... --json`` 互斥 → ok=False + exit 2。"""
+    batch = tmp_path / "urls.txt"
+    batch.write_text("https://x.example.com\n", encoding="utf-8")
+
+    app = make_app()
+    r = runner.invoke(
+        app,
+        [
+            "add", "https://example.com/news",
+            "--from-file", str(batch),
+            "--home", str(home),
+            "--json",
+        ],
+    )
+    assert r.exit_code == 2
+    payload = _json.loads(r.stdout)
+    assert payload["ok"] is False
+    assert "mutually exclusive" in payload["message"]

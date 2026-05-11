@@ -1,4 +1,4 @@
-"""``news-collector sources export`` 命令测试。
+"""``newsbox sources export`` 命令测试。
 
 s4-sources-management Step 5 subagent A 产出。export 是字节级原样复制，
 重点验证保真度（含注释 / 缩进 / EOL 风格）。
@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from news_collector.cli import app
+from newsbox.cli import app
 
 # ------------ fixture：含注释 + 多种缩进的 sample yaml ------------------
 
@@ -45,10 +45,10 @@ web:
 
 @pytest.fixture
 def make_home(tmp_path: Path):
-    """工厂：写一份 yaml 到 ``<tmp>/.news-collector/sources.yaml``，返回 home Path。"""
+    """工厂：写一份 yaml 到 ``<tmp>/.newsbox/sources.yaml``，返回 home Path。"""
 
     def _factory(yaml_text: str = SAMPLE_YAML) -> Path:
-        home = tmp_path / ".news-collector"
+        home = tmp_path / ".newsbox"
         home.mkdir(parents=True, exist_ok=True)
         (home / "sources.yaml").write_text(yaml_text, encoding="utf-8")
         return home
@@ -137,7 +137,7 @@ def test_export_missing_yaml(runner: CliRunner, tmp_path: Path) -> None:
 
 def test_export_preserves_crlf(runner: CliRunner, tmp_path: Path) -> None:
     """CRLF 风格应原样保留（字节复制契约）。"""
-    home = tmp_path / ".news-collector"
+    home = tmp_path / ".newsbox"
     home.mkdir(parents=True, exist_ok=True)
     crlf_bytes = b"rss:\r\n  - id: a\r\n  - id: b\r\n"
     (home / "sources.yaml").write_bytes(crlf_bytes)
@@ -158,3 +158,55 @@ def test_export_empty_file(runner: CliRunner, make_home) -> None:
     result = runner.invoke(app, ["sources", "export", "--home", str(home)])
     assert result.exit_code == 0, result.output
     assert result.stdout == ""
+
+
+# ============================ --json （s9 Step 2） =========================
+
+import json as _json  # noqa: E402
+
+
+def test_export_json_stdout(runner: CliRunner, make_home) -> None:
+    """``sources export --json``（无 --out）输出 path + content + size。"""
+    home = make_home()
+    r = runner.invoke(app, ["sources", "export", "--home", str(home), "--json"])
+    assert r.exit_code == 0, r.output
+    payload = _json.loads(r.stdout)
+    assert "path" in payload
+    assert payload["path"].endswith("sources.yaml")
+    assert payload["content"] == SAMPLE_YAML
+    assert payload["size"] == len(SAMPLE_YAML.encode("utf-8"))
+
+
+def test_export_json_to_file(runner: CliRunner, make_home, tmp_path: Path) -> None:
+    """``sources export --json --out=...`` 输出 written=True。"""
+    home = make_home()
+    out_file = tmp_path / "backup.yaml"
+    r = runner.invoke(
+        app,
+        [
+            "sources", "export",
+            "--home", str(home),
+            "--out", str(out_file),
+            "--json",
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    payload = _json.loads(r.stdout)
+    assert payload["written"] is True
+    assert payload["out"] == str(out_file)
+    assert payload["size"] > 0
+    # 文件确实写入
+    assert out_file.read_bytes() == (home / "sources.yaml").read_bytes()
+
+
+def test_export_json_missing_yaml(runner: CliRunner, tmp_path: Path) -> None:
+    """``sources export --json`` yaml 不存在 → ok=False。"""
+    empty_home = tmp_path / "empty"
+    empty_home.mkdir()
+    r = runner.invoke(
+        app, ["sources", "export", "--home", str(empty_home), "--json"]
+    )
+    assert r.exit_code == 1
+    payload = _json.loads(r.stdout)
+    assert payload["ok"] is False
+    assert "not found" in payload["message"].lower()

@@ -1,12 +1,15 @@
-"""配置加载测试。"""
+"""配置加载测试 + ``newsbox config`` 子命令测试。"""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 import yaml
+from typer.testing import CliRunner
 
-from news_collector.config import (
+from newsbox.commands.config import app as config_app
+from newsbox.config import (
     AppConfig,
     Secrets,
     load_config,
@@ -34,7 +37,7 @@ def test_load_config_pure_default(tmp_path: Path) -> None:
     assert config.fetch.consecutive_failure_skip == 3
 
     assert config.logging.level == "info"
-    assert config.logging.file == "~/.news-collector/logs/news-collector.log"
+    assert config.logging.file == "~/.newsbox/logs/newsbox.log"
     assert config.logging.rotation == "daily"
     assert config.logging.retention_days == 30
 
@@ -115,3 +118,92 @@ def test_write_default_config_creates_home(tmp_path: Path) -> None:
     target = write_default_config(home=sub)
     assert sub.is_dir()
     assert target.is_file()
+
+
+# ---- ``newsbox config`` --json CLI 测试（s9 Step 2） -----------------------
+
+
+def _run(*args: str) -> "object":
+    """走 typer.Typer app（config 子组），返回 CliRunner result。"""
+    runner = CliRunner()
+    return runner.invoke(config_app, list(args))
+
+
+def test_config_init_human_view(tmp_path: Path) -> None:
+    """init 人类视图：[ok] 行不变，路径出现在 stdout。"""
+    home = tmp_path / "home"
+    result = _run("init", "--home", str(home))
+    assert result.exit_code == 0
+    assert "[ok] config initialized:" in result.output
+    assert str(home / "config.yaml") in result.output
+
+
+def test_config_init_json_ok(tmp_path: Path) -> None:
+    """init --json happy path：{ok: true, details.path, details.already_exists=False}。"""
+    home = tmp_path / "home"
+    result = _run("init", "--home", str(home), "--json")
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["ok"] is True
+    assert payload["message"] == "config initialized"
+    assert payload["details"]["home"] == str(home)
+    assert payload["details"]["path"] == str(home / "config.yaml")
+    assert payload["details"]["already_exists"] is False
+    assert (home / "config.yaml").is_file()
+
+
+def test_config_init_json_already_exists(tmp_path: Path) -> None:
+    """init --json 已存在路径：{ok: false, details.already_exists=True}，exit 1。"""
+    home = tmp_path / "home"
+    # 先写一遍
+    first = _run("init", "--home", str(home))
+    assert first.exit_code == 0
+    # 不带 --force 再调一遍
+    result = _run("init", "--home", str(home), "--json")
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["ok"] is False
+    assert payload["details"]["already_exists"] is True
+    assert payload["details"]["path"] == str(home / "config.yaml")
+
+
+def test_config_init_json_force_overwrites(tmp_path: Path) -> None:
+    """init --json --force：已存在文件也能成功写入。"""
+    home = tmp_path / "home"
+    _run("init", "--home", str(home))
+    result = _run("init", "--home", str(home), "--force", "--json")
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["ok"] is True
+    assert payload["details"]["already_exists"] is False
+
+
+def test_config_show_human_view(tmp_path: Path) -> None:
+    """show 人类视图：两行（JSON dump + secrets repr）保留。"""
+    home = tmp_path / "home"
+    home.mkdir()
+    result = _run("show", "--home", str(home))
+    assert result.exit_code == 0
+    out = result.output
+    # 第一行是 JSON dump（fetch / logging 块）
+    assert '"fetch"' in out
+    assert '"logging"' in out
+    # 第二行是 secrets repr
+    assert "secrets: Secrets()" in out
+
+
+def test_config_show_json(tmp_path: Path) -> None:
+    """show --json：返回 {home, path, config: {...}, secrets: '...'}。"""
+    home = tmp_path / "home"
+    home.mkdir()
+    result = _run("show", "--home", str(home), "--json")
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["home"] == str(home)
+    assert payload["path"] == str(home / "config.yaml")
+    # 配置 dump 含 fetch / logging 子树
+    assert "fetch" in payload["config"]
+    assert "logging" in payload["config"]
+    assert payload["config"]["fetch"]["default_since"] == "24h"
+    # secrets 以 repr 字符串呈现（脱敏）
+    assert payload["secrets"] == "Secrets()"

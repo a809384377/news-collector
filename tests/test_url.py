@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from news_collector.utils.url import canonicalize_url, content_hash, url_canonical_hash
+from newsbox.utils.url import canonicalize_url, content_hash, url_canonical_hash
 
 
 # ---- canonicalize_url -------------------------------------------------------

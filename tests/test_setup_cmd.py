@@ -12,15 +12,16 @@ subagent A 踩过此坑）。
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 import typer
 from typer.testing import CliRunner
 
-from news_collector.commands import setup as setup_mod  # NOTE: 别名故意避开
+from newsbox.commands import setup as setup_mod  # NOTE: 别名故意避开
 # `setup_module` —— pytest xunit setup_module hook 名字，会被当成 hook 调用。
-from news_collector.commands.docker_helpers import DockerError
+from newsbox.commands.docker_helpers import DockerError
 
 
 # ---- helpers ---------------------------------------------------------------
@@ -293,7 +294,59 @@ def test_setup_copies_compose_yml_to_home(
     assert "services:" in compose_text
     assert "rsshub:" in compose_text
     assert "redis:" in compose_text
-    assert "${HOME}/.news-collector/.env" in compose_text
+    assert "${HOME}/.newsbox/.env" in compose_text
+
+
+def test_setup_json_happy_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--json 模式：成功 emit_ok 单块 JSON + token prompt 被跳过。"""
+    home = tmp_path / "home"
+    _mock_docker_needs_up(monkeypatch)
+    # 强制 tty，验证 --json 仍然不调 prompt（隐含 --yes）
+    _force_tty(monkeypatch)
+
+    def boom(*a, **kw):
+        raise AssertionError("typer.prompt must not be called in --json mode")
+
+    monkeypatch.setattr(typer, "prompt", boom)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        _build_app(), ["setup", "--home", str(home), "--json"]
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["ok"] is True
+    assert payload["message"] == "setup complete"
+    assert payload["details"]["home"] == str(home)
+    steps = payload["details"]["steps"]
+    names = [s["name"] for s in steps]
+    assert names == ["dirs", "sources_yaml", "compose_yml", "env", "token", "containers", "db"]
+    # token 在 --json 隐含 --yes 模式应标 skip + token_skipped=True
+    token_step = next(s for s in steps if s["name"] == "token")
+    assert token_step["action"] == "skip"
+    assert token_step["token_skipped"] is True
+
+
+def test_setup_json_docker_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--json 模式 docker 步失败：emit_err + exit 1。"""
+    home = tmp_path / "home"
+    monkeypatch.setattr(setup_mod.docker_helpers, "docker_daemon_alive", lambda: False)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        _build_app(), ["setup", "--home", str(home), "--json"]
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["ok"] is False
+    assert "docker step failed" in payload["message"]
+    assert payload["details"]["home"] == str(home)
 
 
 def test_compose_yml_idempotent_on_rerun(

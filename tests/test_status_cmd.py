@@ -1,4 +1,4 @@
-"""``news-collector status`` 命令测试。
+"""``newsbox status`` 命令测试。
 
 覆盖：
 1. 全绿：容器 Up + 数据库有行 + 失败 0 → exit 0 + 三段都展示
@@ -22,9 +22,9 @@ import pytest
 import typer
 from typer.testing import CliRunner
 
-import news_collector.commands.status as status_module
-from news_collector.commands.status import status_cmd
-from news_collector.db import get_conn, init_db
+import newsbox.commands.status as status_module
+from newsbox.commands.status import status_cmd
+from newsbox.db import get_conn, init_db
 
 
 # ---- helpers ---------------------------------------------------------------
@@ -294,3 +294,135 @@ def test_status_long_error_truncated(
     assert long_err not in out
     truncated = "X" * 59 + "…"
     assert truncated in out
+
+
+# ---- --json tests (s9 Step 2) ---------------------------------------------
+
+
+def test_status_json_all_green(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--json 全绿：containers.available + database 有行 + recent_failures 空。"""
+    import json as _json
+
+    home = tmp_path / "home"
+    home.mkdir()
+    db_path = home / "raw.db"
+    _seed_db(
+        db_path,
+        articles_count=3,
+        state_rows=[
+            {
+                "source_type": "rss",
+                "source_id": "src_a",
+                "last_fetch_at": "2026-05-09T23:45:12",
+                "last_error": None,
+                "consecutive_failures": 0,
+            },
+        ],
+    )
+    _mock_container_status(monkeypatch, {"rsshub": "Up", "redis": "Up"})
+
+    result = _run(_make_app(), "--home", str(home), "--json")
+
+    assert result.exit_code == 0
+    payload = _json.loads(result.output)
+    # 顶层 schema
+    assert payload["home"] == str(home)
+    assert set(payload.keys()) == {
+        "home",
+        "containers",
+        "database",
+        "recent_failures",
+    }
+    # containers 段
+    assert payload["containers"]["available"] is True
+    assert payload["containers"]["services"] == {"rsshub": "Up", "redis": "Up"}
+    # database 段
+    assert payload["database"]["exists"] is True
+    assert payload["database"]["total_rows"] == 3
+    assert payload["database"]["path"] == str(db_path)
+    assert payload["database"]["last_fetch_at"] == "2026-05-09T23:45:12"
+    # recent_failures 段
+    assert payload["recent_failures"]["top_n"] == 5
+    assert payload["recent_failures"]["items"] == []
+
+
+def test_status_json_docker_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--json 模式下 docker 错误以 containers.available=false 表达，不破坏 JSON。"""
+    import json as _json
+
+    home = tmp_path / "home"
+    home.mkdir()
+    db_path = home / "raw.db"
+    _seed_db(db_path, articles_count=1)
+    _mock_container_status(
+        monkeypatch, status_module.DockerError("docker daemon 未运行")
+    )
+
+    result = _run(_make_app(), "--home", str(home), "--json")
+
+    assert result.exit_code == 0
+    payload = _json.loads(result.output)
+    assert payload["containers"]["available"] is False
+    assert "docker daemon 未运行" in payload["containers"]["error"]
+    # 数据库段仍正常
+    assert payload["database"]["exists"] is True
+    assert payload["database"]["total_rows"] == 1
+
+
+def test_status_json_db_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--json + raw.db 缺失：database.exists=false，仍 exit 0。"""
+    import json as _json
+
+    home = tmp_path / "home"
+    home.mkdir()
+    _mock_container_status(monkeypatch, {"rsshub": "Up", "redis": "Up"})
+
+    result = _run(_make_app(), "--home", str(home), "--json")
+
+    assert result.exit_code == 0
+    payload = _json.loads(result.output)
+    assert payload["database"]["exists"] is False
+    # 缺失时不应有 total_rows / size_bytes 字段
+    assert "total_rows" not in payload["database"]
+    assert payload["recent_failures"]["items"] == []
+
+
+def test_status_json_failures_top5(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--json failures 段返回 top 5 + 按 consecutive_failures DESC 排序。"""
+    import json as _json
+
+    home = tmp_path / "home"
+    home.mkdir()
+    db_path = home / "raw.db"
+    state_rows = [
+        {
+            "source_type": "rss",
+            "source_id": f"bad_{i}",
+            "last_fetch_at": "2026-05-09T10:00:00",
+            "last_error": f"err {i}",
+            "consecutive_failures": i,
+        }
+        for i in range(1, 8)
+    ]
+    _seed_db(db_path, state_rows=state_rows)
+    _mock_container_status(monkeypatch, {"rsshub": "Up", "redis": "Up"})
+
+    result = _run(_make_app(), "--home", str(home), "--json")
+
+    assert result.exit_code == 0
+    payload = _json.loads(result.output)
+    items = payload["recent_failures"]["items"]
+    assert len(items) == 5
+    # 降序：7, 6, 5, 4, 3
+    assert [r["consecutive_failures"] for r in items] == [7, 6, 5, 4, 3]
+    assert items[0]["source_id"] == "bad_7"
+    # JSON 段保留原始 last_error（不截断）
+    assert items[0]["last_error"] == "err 7"
