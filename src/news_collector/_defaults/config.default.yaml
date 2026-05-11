@@ -1,0 +1,21 @@
+fetch:
+  default_since: 24h
+  per_source_rate_limit_seconds:
+    rss: 1
+    web: 2
+  # 同类型并发度（s2-collector-resilience Step 4）：rss 8 路并发保护 RSSHub
+  # 容器 + X token 限速；web 永远串行（爬虫友好，1 即可）。命令行 --concurrency
+  # 仅覆盖 rss 桶，web 桶始终串行
+  concurrency:
+    rss: 8
+    web: 1
+  http_retry:
+    max_attempts: 4
+    backoff_base_seconds: 1   # 1, 2, 4, 8
+  consecutive_failure_skip: 3
+
+logging:
+  level: info
+  file: ~/.news-collector/logs/news-collector.log
+  rotation: daily
+  retention_days: 30

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Simon Willison's Weblog</title>
+  <link href="https://simonwillison.net/"/>
+  <updated>2026-05-05T12:00:00Z</updated>
+  <id>https://simonwillison.net/</id>
+  <entry>
+    <title>LLM 0.20 released</title>
+    <link href="https://simonwillison.net/2026/May/05/llm-020/"/>
+    <id>https://simonwillison.net/2026/May/05/llm-020/</id>
+    <updated>2026-05-05T12:00:00Z</updated>
+    <published>2026-05-05T12:00:00Z</published>
+    <summary>Short summary.</summary>
+    <content type="html">Full content body — should be picked over summary.</content>
+  </entry>
+  <entry>
+    <title>Older entry</title>
+    <link href="https://simonwillison.net/2026/Mar/01/older/"/>
+    <id>https://simonwillison.net/2026/Mar/01/older/</id>
+    <updated>2026-03-01T12:00:00Z</updated>
+    <published>2026-03-01T12:00:00Z</published>
+    <content type="html">Older content.</content>
+  </entry>
+</feed>
