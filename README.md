@@ -102,6 +102,25 @@ uv run pytest                            # 351 测试用例全绿
 
 ---
 
+## Claude Code skill 安装（可选）
+
+让 Claude Code agent 自然知道 news-collector 的 5 类标准用法（查信源 / 读数据 / 加信源 / 看健康 / 看采集状态），不需要每次手动提示。
+
+```bash
+# 路径 A：clone 仓库后整目录拷贝（推荐，方便后续 git pull 更新）
+git clone https://github.com/a809384377/news-collector.git
+cp -r news-collector/skills/news-collector ~/.claude/skills/
+
+# 路径 B：只拿 SKILL.md 单文件
+mkdir -p ~/.claude/skills/news-collector
+curl -L -o ~/.claude/skills/news-collector/SKILL.md \
+  https://raw.githubusercontent.com/a809384377/news-collector/main/skills/news-collector/SKILL.md
+```
+
+装完后 Claude Code 启动时自动加载。agent 接到 news-collector 后会按 [skills/news-collector/SKILL.md](./skills/news-collector/SKILL.md) 的 5 类场景标准用法操作。
+
+---
+
 ## 前置要求
 
 | 要求 | 说明 | macOS 装法 |
@@ -178,6 +197,7 @@ news-collector setup               # 重建
 
 | 文档 | 干什么用 |
 |---|---|
+| [skills/news-collector/SKILL.md](./skills/news-collector/SKILL.md) | Claude Code skill 说明书（agent 接入必读） |
 | [docs/sdk-usage.md](./docs/sdk-usage.md) | SDK 使用指南（消费方必读） |
 | [docs/install-guide.md](./docs/install-guide.md) | 安装路径详解 + 国内镜像配置 |
 | [docs/rsshub-setup.md](./docs/rsshub-setup.md) | RSSHub 容器接入 + X auth_token 提取 |
