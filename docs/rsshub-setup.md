@@ -16,7 +16,7 @@ newsbox 的 X / Reddit 等私有 API 信源接入由 RSSHub（社区维护，git
 ## 2. 容器启动
 
 ```bash
-cd ~/Desktop/tools/news-collector
+cd ~/Desktop/tools/newsbox
 
 # 首次：准备数据目录 + .env
 mkdir -p ~/.newsbox/rsshub/redis-data
@@ -75,7 +75,7 @@ TWITTER_AUTH_TOKEN=token1,token2,token3
 ### 3.5 重启容器使 token 生效
 
 ```bash
-cd ~/Desktop/tools/news-collector
+cd ~/Desktop/tools/newsbox
 docker compose restart rsshub
 ```
 

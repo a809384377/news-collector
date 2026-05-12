@@ -66,7 +66,7 @@ uv pip install newsbox  # 临时环境用
 
 ```bash
 cd ~/Desktop/tools/<your-consumer>
-uv pip install -e ../news-collector
+uv pip install -e ../newsbox
 ```
 
 ---

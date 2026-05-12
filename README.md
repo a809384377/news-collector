@@ -6,8 +6,6 @@
 
 采集层基础服务：从上游各类内容平台（社交 / 论坛 / 博客 / 官网）抓原料 → 落 SQLite → 用 CLI 或 Python SDK 读出来。适合 AI 日报、行业内容雷达、垂直领域信息追踪等下游系统作为采集层接入；架构上以 `domain_tags` 多标签机制为未来跨领域扩展留位。
 
-> 仓库名沿用历史命名 `news-collector`（GitHub URL），PyPI 包名 / CLI 命令 / Python module 已全线统一为 `newsbox`。
-
 ---
 
 ## 它解决什么
@@ -59,8 +57,8 @@ newsbox stats                              # 库健康度统计
 开发者改源码：
 
 ```bash
-git clone https://github.com/a809384377/news-collector.git
-cd news-collector
+git clone https://github.com/a809384377/newsbox.git
+cd newsbox
 uv sync           # 装依赖
 uv run pytest     # 跑测试
 ```
@@ -75,13 +73,13 @@ uv run pytest     # 跑测试
 
 ```bash
 # clone 仓库后整目录拷贝（方便后续 git pull 更新）
-git clone https://github.com/a809384377/news-collector.git
-cp -r news-collector/skills/newsbox ~/.claude/skills/
+git clone https://github.com/a809384377/newsbox.git
+cp -r newsbox/skills/newsbox ~/.claude/skills/
 
 # 或只拿 SKILL.md 单文件
 mkdir -p ~/.claude/skills/newsbox
 curl -L -o ~/.claude/skills/newsbox/SKILL.md \
-  https://raw.githubusercontent.com/a809384377/news-collector/main/skills/newsbox/SKILL.md
+  https://raw.githubusercontent.com/a809384377/newsbox/main/skills/newsbox/SKILL.md
 ```
 
 agent 具体任务模板以 [skills/newsbox/SKILL.md](./skills/newsbox/SKILL.md) 为准，README 只给安装入口。

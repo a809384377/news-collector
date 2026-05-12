@@ -1,6 +1,6 @@
 [project]
 name = "newsbox"
-version = "1.0.0"
+version = "1.0.1"
 description = "采集层基础服务：上游信源采集 → 落库 → SDK 暴露给下游多领域消费方"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -38,9 +38,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/a809384377/news-collector"
-Repository = "https://github.com/a809384377/news-collector"
-Issues = "https://github.com/a809384377/news-collector/issues"
+Homepage = "https://github.com/a809384377/newsbox"
+Repository = "https://github.com/a809384377/newsbox"
+Issues = "https://github.com/a809384377/newsbox/issues"
 
 [project.scripts]
 newsbox = "newsbox.cli:app"
