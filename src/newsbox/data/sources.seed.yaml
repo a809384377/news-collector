@@ -27,133 +27,6 @@
 # ============================================================
 rss:
   # ───── X / KOL / 创始人 / 名人（20 条）─────
-  - id: x_dotey
-    url: "http://localhost:1200/twitter/user/dotey?format=atom"
-    tier: kol
-    domain: [ai]
-    # 宝玉，AI 领域 KOL，偏 AI coding / agent 应用
-  - id: x_alchainhust
-    url: "http://localhost:1200/twitter/user/alchainhust?format=atom"
-    tier: kol
-    domain: [ai]
-    # 花叔，AI 领域 KOL，偏 AI coding / agent 应用
-  - id: x_kepano
-    url: "http://localhost:1200/twitter/user/kepano?format=atom"
-    tier: kol
-    domain: [ai]
-    # kepano，Obsidian CEO
-  - id: x_op7418
-    url: "http://localhost:1200/twitter/user/op7418?format=atom"
-    tier: kol
-    domain: [ai]
-    # 歸藏，AI 领域 KOL，偏 AI coding / agent 应用
-  - id: x_vista8
-    url: "http://localhost:1200/twitter/user/vista8?format=atom"
-    tier: kol
-    domain: [ai]
-    # 向阳乔木，AI 领域 KOL，偏 AI coding / agent 应用
-  - id: x_karpathy
-    url: "http://localhost:1200/twitter/user/karpathy?format=atom"
-    tier: kol
-    domain: [ai]
-    # Andrej Karpathy，AI 领域大佬（前 Tesla AI / OpenAI）
-  - id: x_berryxia
-    url: "http://localhost:1200/twitter/user/berryxia?format=atom"
-    tier: kol
-    domain: [ai]
-    # berryxia，AI 领域 KOL，偏 AI coding / agent 应用
-  - id: x_oggii_0
-    url: "http://localhost:1200/twitter/user/oggii_0?format=atom"
-    tier: kol
-    domain: [ai]
-    # oggii，AI 艺术创作（生图 / 视频）
-  - id: x_elliotchen100
-    url: "http://localhost:1200/twitter/user/elliotchen100?format=atom"
-    tier: kol
-    domain: [ai]
-  - id: x_tuturetom
-    url: "http://localhost:1200/twitter/user/tuturetom?format=atom"
-    tier: kol
-    domain: [ai]
-    # opendesign 创始人
-  - id: x_waytoagi
-    url: "http://localhost:1200/twitter/user/waytoagi?format=atom"
-    tier: kol
-    domain: [ai]
-    # waytoagi，AI 领域 KOL（应用层技巧分享）
-  - id: x_barret_china
-    url: "http://localhost:1200/twitter/user/barret_china?format=atom"
-    tier: kol
-    domain: [ai]
-  - id: x_sama
-    url: "http://localhost:1200/twitter/user/sama?format=atom"
-    tier: kol
-    domain: [ai]
-    # Sam Altman，OpenAI 创始人 / CEO
-  - id: x_elonmusk
-    url: "http://localhost:1200/twitter/user/elonmusk?format=atom"
-    tier: kol
-    domain: [ai]
-    # 马斯克（SpaceX / X / xAI 创始人）；信号噪声比低，靠 AI 初筛过滤非 AI 内容
-  - id: x_swyx
-    url: "http://localhost:1200/twitter/user/swyx?format=atom"
-    tier: kol
-    domain: [ai]
-    # AI Engineer / Latent Space，AI 工程生态雷达
-  - id: x_kevinweil
-    url: "http://localhost:1200/twitter/user/kevinweil?format=atom"
-    tier: kol
-    domain: [ai]
-    # OpenAI 产品组织动态（宏观价值）
-  - id: x__catwu
-    url: "http://localhost:1200/twitter/user/_catwu?format=atom"
-    tier: kol
-    domain: [ai]
-    # Claude Code / Cowork / AI 产品开发节奏
-  - id: x_steipete
-    url: "http://localhost:1200/twitter/user/steipete?format=atom"
-    tier: kol
-    domain: [ai]
-    # openclaw 创始人
-  - id: x_trq212
-    url: "http://localhost:1200/twitter/user/trq212?format=atom"
-    tier: kol
-    domain: [ai]
-    # Claude Code 相关更新 / 用法 / 产品方向
-  - id: x_amasad
-    url: "http://localhost:1200/twitter/user/amasad?format=atom"
-    tier: kol
-    domain: [ai]
-    # Replit 创始人（AI coding / agent 方向）
-
-  # ───── X / 官方账号（6 条）─────
-  - id: x_openai
-    url: "http://localhost:1200/twitter/user/openai?format=atom"
-    tier: official_first_party
-    domain: [ai]
-  - id: x_anthropicai
-    url: "http://localhost:1200/twitter/user/anthropicai?format=atom"
-    tier: official_first_party
-    domain: [ai]
-  - id: x_claudeai
-    url: "http://localhost:1200/twitter/user/claudeai?format=atom"
-    tier: official_first_party
-    domain: [ai]
-    # Claude 产品官号
-  - id: x_geminiapp
-    url: "http://localhost:1200/twitter/user/geminiapp?format=atom"
-    tier: official_first_party
-    domain: [ai]
-    # Google Gemini 官号
-  - id: x_notebooklm
-    url: "http://localhost:1200/twitter/user/notebooklm?format=atom"
-    tier: official_first_party
-    domain: [ai]
-    # Google NotebookLM 官号
-  - id: x_googlelabs
-    url: "http://localhost:1200/twitter/user/googlelabs?format=atom"
-    tier: official_first_party
-    domain: [ai]
 
   # ───── Reddit 板块（4 条，reddit 原生 .rss，免登录）─────
   - id: r_localllama
@@ -325,3 +198,108 @@ web:
     # MVP 默认关闭；OpenAI 产品级更新通过 chatgpt_release_notes + openai_news 已覆盖
     # 后续若引入 playwright 兜底再启用
     notes: "SPA 渲染，待 playwright 兜底引入或 OpenAI 提供 .md 端点"
+twikit:
+  - id: x_dotey
+    url: "dotey"
+    tier: kol
+    domain: [ai]
+  - id: x_alchainhust
+    url: "alchainhust"
+    tier: kol
+    domain: [ai]
+  - id: x_kepano
+    url: "kepano"
+    tier: kol
+    domain: [ai]
+  - id: x_op7418
+    url: "op7418"
+    tier: kol
+    domain: [ai]
+  - id: x_vista8
+    url: "vista8"
+    tier: kol
+    domain: [ai]
+  - id: x_karpathy
+    url: "karpathy"
+    tier: kol
+    domain: [ai]
+  - id: x_berryxia
+    url: "berryxia"
+    tier: kol
+    domain: [ai]
+  - id: x_oggii_0
+    url: "oggii_0"
+    tier: kol
+    domain: [ai]
+  - id: x_elliotchen100
+    url: "elliotchen100"
+    tier: kol
+    domain: [ai]
+  - id: x_tuturetom
+    url: "tuturetom"
+    tier: kol
+    domain: [ai]
+  - id: x_waytoagi
+    url: "waytoagi"
+    tier: kol
+    domain: [ai]
+  - id: x_barret_china
+    url: "barret_china"
+    tier: kol
+    domain: [ai]
+  - id: x_sama
+    url: "sama"
+    tier: kol
+    domain: [ai]
+  - id: x_elonmusk
+    url: "elonmusk"
+    tier: kol
+    domain: [ai]
+  - id: x_swyx
+    url: "swyx"
+    tier: kol
+    domain: [ai]
+  - id: x_kevinweil
+    url: "kevinweil"
+    tier: kol
+    domain: [ai]
+  - id: x__catwu
+    url: "_catwu"
+    tier: kol
+    domain: [ai]
+  - id: x_steipete
+    url: "steipete"
+    tier: kol
+    domain: [ai]
+  - id: x_trq212
+    url: "trq212"
+    tier: kol
+    domain: [ai]
+  - id: x_amasad
+    url: "amasad"
+    tier: kol
+    domain: [ai]
+  - id: x_openai
+    url: "openai"
+    tier: official_first_party
+    domain: [ai]
+  - id: x_anthropicai
+    url: "anthropicai"
+    tier: official_first_party
+    domain: [ai]
+  - id: x_claudeai
+    url: "claudeai"
+    tier: official_first_party
+    domain: [ai]
+  - id: x_geminiapp
+    url: "geminiapp"
+    tier: official_first_party
+    domain: [ai]
+  - id: x_notebooklm
+    url: "notebooklm"
+    tier: official_first_party
+    domain: [ai]
+  - id: x_googlelabs
+    url: "googlelabs"
+    tier: official_first_party
+    domain: [ai]

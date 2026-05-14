@@ -73,8 +73,8 @@ def _mock_sample_adapters_ok(monkeypatch: pytest.MonkeyPatch, count: int = 3) ->
         async def fetch(self, source, since):
             return list(range(count))
 
-    monkeypatch.setitem(doc_mod._ADAPTER_REGISTRY, "rss", _FakeAdapter)
-    monkeypatch.setitem(doc_mod._ADAPTER_REGISTRY, "web", _FakeAdapter)
+    monkeypatch.setitem(doc_mod.ADAPTER_REGISTRY, "rss", _FakeAdapter)
+    monkeypatch.setitem(doc_mod.ADAPTER_REGISTRY, "web", _FakeAdapter)
 
 
 # ---- 测试 ------------------------------------------------------------------
@@ -193,8 +193,8 @@ def test_doctor_sample_fetch_error_warns_not_fails(
         async def fetch(self, source, since):
             raise RuntimeError("network broken")
 
-    monkeypatch.setitem(doc_mod._ADAPTER_REGISTRY, "rss", _BoomAdapter)
-    monkeypatch.setitem(doc_mod._ADAPTER_REGISTRY, "web", _BoomAdapter)
+    monkeypatch.setitem(doc_mod.ADAPTER_REGISTRY, "rss", _BoomAdapter)
+    monkeypatch.setitem(doc_mod.ADAPTER_REGISTRY, "web", _BoomAdapter)
 
     runner = CliRunner()
     result = runner.invoke(_build_app(), ["doctor", "--home", str(home)])
@@ -232,8 +232,8 @@ def test_doctor_sample_fetch_timeout_warns(
         async def fetch(self, source, since):
             await asyncio.sleep(60)  # 远超 _SAMPLE_TIMEOUT_SECONDS
 
-    monkeypatch.setitem(doc_mod._ADAPTER_REGISTRY, "rss", _SlowAdapter)
-    monkeypatch.setitem(doc_mod._ADAPTER_REGISTRY, "web", _SlowAdapter)
+    monkeypatch.setitem(doc_mod.ADAPTER_REGISTRY, "rss", _SlowAdapter)
+    monkeypatch.setitem(doc_mod.ADAPTER_REGISTRY, "web", _SlowAdapter)
     # 缩短超时让测试快
     monkeypatch.setattr(doc_mod, "_SAMPLE_TIMEOUT_SECONDS", 0.05)
 
@@ -263,7 +263,7 @@ def test_doctor_json_all_green(
     assert payload["ok"] is True
     assert payload["home"] == str(home)
     checks = payload["checks"]
-    # 每条 check 应有 name 在 {docker, config, database, sample_fetch}
+    # 默认 fixture 不含 twikit 段 → twikit panel 整 panel skip，section 仅含四块
     section_names = {c["name"] for c in checks}
     assert section_names == {"docker", "config", "database", "sample_fetch"}
     # 全部 level 都该是 ok
@@ -321,3 +321,173 @@ def test_doctor_docker_query_fail(
     assert result.exit_code == 1
     assert "[FAIL]" in result.output
     assert "ps decode failure" in result.output
+
+
+# ---- twikit panel 测试 -----------------------------------------------------
+
+
+def _seed_home_with_twikit(home: Path, *, cookies_payload: str | None) -> None:
+    """seed home，``sources.yaml`` 含一条 twikit 信源；``cookies_payload`` 为 None
+    则不写 cookies 文件，否则按 raw 字符串写入。"""
+    home.mkdir()
+    (home / ".env").write_text("TWITTER_AUTH_TOKEN=ok-token-1234\n")
+    (home / "sources.yaml").write_text(
+        "rss:\n"
+        "  - id: fake_rss\n"
+        "    url: https://example.com/feed\n"
+        "    tier: kol\n"
+        "    domain: [ai]\n"
+        "twikit:\n"
+        "  - id: x_dotey\n"
+        "    url: dotey\n"
+        "    tier: kol\n"
+        "    domain: [ai]\n"
+    )
+    init_db(home / "raw.db")
+    if cookies_payload is not None:
+        (home / "twikit_cookies.json").write_text(cookies_payload)
+
+
+def _mock_sample_adapters_for_twikit_home(
+    monkeypatch: pytest.MonkeyPatch, count: int = 1
+) -> None:
+    """mock rss + twikit adapter 都返回 N 条假数据（避免 sample_fetch 网络调用）。"""
+
+    class _FakeAdapter:
+        def __init__(self, *a, **kw) -> None:
+            pass
+
+        async def fetch(self, source, since):
+            return list(range(count))
+
+    monkeypatch.setitem(doc_mod.ADAPTER_REGISTRY, "rss", _FakeAdapter)
+    monkeypatch.setitem(doc_mod.ADAPTER_REGISTRY, "web", _FakeAdapter)
+    monkeypatch.setitem(doc_mod.ADAPTER_REGISTRY, "twikit", _FakeAdapter)
+
+
+def test_doctor_twikit_panel_skipped_when_no_twikit_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """默认 fixture 仅 rss/web 段 → twikit panel 整 panel skip，输出无 ``[Twikit]`` header。"""
+    home = tmp_path / "home"
+    _seed_healthy_home(home)  # 无 twikit 段
+    _mock_docker_healthy(monkeypatch)
+    _mock_sample_adapters_ok(monkeypatch, count=1)
+
+    runner = CliRunner()
+    result = runner.invoke(_build_app(), ["doctor", "--home", str(home)])
+
+    assert result.exit_code == 0, result.output
+    assert "[Twikit]" not in result.output
+    assert "twikit_cookies.json" not in result.output
+
+
+def test_doctor_twikit_cookies_missing_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """sources.yaml 含 twikit 段但 cookies 文件不存在 → twikit panel [FAIL] + exit 1。"""
+    home = tmp_path / "home"
+    _seed_home_with_twikit(home, cookies_payload=None)
+    _mock_docker_healthy(monkeypatch)
+    _mock_sample_adapters_for_twikit_home(monkeypatch)
+
+    runner = CliRunner()
+    result = runner.invoke(_build_app(), ["doctor", "--home", str(home)])
+
+    assert result.exit_code == 1
+    assert "[Twikit]" in result.output
+    assert "[OK]   twikit version" in result.output  # 版本号读取成功
+    assert "[FAIL] twikit cookies 检查失败" in result.output
+    assert "twikit_cookies.json" in result.output  # 文案带路径
+    assert "docs/twikit-setup.md" in result.output  # fix 引用文档
+
+
+def test_doctor_twikit_auth_token_placeholder_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """cookies.json 中 auth_token 仍是 ``<placeholder>`` → [FAIL]，文案区分 auth_token。"""
+    home = tmp_path / "home"
+    _seed_home_with_twikit(
+        home,
+        cookies_payload=json.dumps({"auth_token": "<paste here>", "ct0": "abc123"}),
+    )
+    _mock_docker_healthy(monkeypatch)
+    _mock_sample_adapters_for_twikit_home(monkeypatch)
+
+    runner = CliRunner()
+    result = runner.invoke(_build_app(), ["doctor", "--home", str(home)])
+
+    assert result.exit_code == 1
+    assert "[FAIL] twikit cookies 检查失败" in result.output
+    assert "auth_token" in result.output
+
+
+def test_doctor_twikit_ct0_missing_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """cookies.json 缺 ct0 字段 → [FAIL]，文案区分 ct0。"""
+    home = tmp_path / "home"
+    _seed_home_with_twikit(
+        home,
+        cookies_payload=json.dumps({"auth_token": "real-token-value", "ct0": ""}),
+    )
+    _mock_docker_healthy(monkeypatch)
+    _mock_sample_adapters_for_twikit_home(monkeypatch)
+
+    runner = CliRunner()
+    result = runner.invoke(_build_app(), ["doctor", "--home", str(home)])
+
+    assert result.exit_code == 1
+    assert "[FAIL] twikit cookies 检查失败" in result.output
+    assert "ct0" in result.output
+
+
+def test_doctor_twikit_all_green(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """cookies 完整 → twikit panel 三条 OK（版本 + cookies present + 字段就位）。"""
+    home = tmp_path / "home"
+    _seed_home_with_twikit(
+        home,
+        cookies_payload=json.dumps(
+            {"auth_token": "real-token-value", "ct0": "real-ct0-hex"}
+        ),
+    )
+    _mock_docker_healthy(monkeypatch)
+    _mock_sample_adapters_for_twikit_home(monkeypatch)
+
+    runner = CliRunner()
+    result = runner.invoke(_build_app(), ["doctor", "--home", str(home)])
+
+    assert result.exit_code == 0, result.output
+    assert "[Twikit]" in result.output
+    assert "[OK]   twikit version" in result.output
+    assert "[OK]   twikit_cookies.json present" in result.output
+    assert "[OK]   auth_token + ct0 字段就位" in result.output
+
+
+def test_doctor_twikit_json_section_included_when_triggered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--json 模式 + 触发 twikit panel：checks 数组含 name=twikit 条目。"""
+    home = tmp_path / "home"
+    _seed_home_with_twikit(
+        home,
+        cookies_payload=json.dumps(
+            {"auth_token": "real-token-value", "ct0": "real-ct0-hex"}
+        ),
+    )
+    _mock_docker_healthy(monkeypatch)
+    _mock_sample_adapters_for_twikit_home(monkeypatch)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        _build_app(), ["doctor", "--home", str(home), "--json"]
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    section_names = {c["name"] for c in payload["checks"]}
+    assert "twikit" in section_names
+    twikit_checks = [c for c in payload["checks"] if c["name"] == "twikit"]
+    assert all(c["level"] == "ok" for c in twikit_checks), twikit_checks

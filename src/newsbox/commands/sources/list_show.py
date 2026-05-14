@@ -17,9 +17,10 @@ import typer
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
+from ...adapters import supported_types
 from .._helpers import home_option
 from .._json import emit, emit_err, json_option
-from ._io import SOURCE_KINDS, find_source, load_yaml
+from ._io import find_source, load_yaml
 
 
 def _to_plain(value):
@@ -61,7 +62,7 @@ def _collect_rows(
 ) -> list[tuple[str, str, str, bool, str]]:
     """扫一遍 data，返回过滤后的 ``(type, tier, id, enabled, url)`` 元组列表。"""
     rows: list[tuple[str, str, str, bool, str]] = []
-    for kind in SOURCE_KINDS:
+    for kind in supported_types():
         if type_filter is not None and kind != type_filter:
             continue
         items = data.get(kind) or []
@@ -93,7 +94,7 @@ def _summary_line(data: CommentedMap, rows: list[tuple]) -> str:
     total = len(rows)
     enabled_total = sum(1 for r in rows if r[3])
     parts: list[str] = []
-    for kind in SOURCE_KINDS:
+    for kind in supported_types():
         kind_rows = [r for r in rows if r[0] == kind]
         kind_total = len(kind_rows)
         kind_enabled = sum(1 for r in kind_rows if r[3])
@@ -137,16 +138,16 @@ def sources_list_cmd(
         raise typer.BadParameter(
             "--enabled-only 与 --disabled-only 互斥，不能同时使用"
         )
-    if type_filter is not None and type_filter not in SOURCE_KINDS:
+    if type_filter is not None and type_filter not in supported_types():
         if json_output:
             emit_err(
-                f"--type 必须是 {SOURCE_KINDS} 之一",
+                f"--type 必须是 {supported_types()} 之一",
                 got=type_filter,
-                allowed=list(SOURCE_KINDS),
+                allowed=list(supported_types()),
             )
             raise typer.Exit(code=2)
         raise typer.BadParameter(
-            f"--type 必须是 {SOURCE_KINDS} 之一，got: {type_filter!r}"
+            f"--type 必须是 {supported_types()} 之一，got: {type_filter!r}"
         )
 
     yaml_path = home / "sources.yaml"
@@ -178,7 +179,7 @@ def sources_list_cmd(
     if json_output:
         # 按类型聚合：{rss: {total, enabled, sources: [...]}, web: {...}}
         by_kind: dict[str, dict] = {
-            kind: {"total": 0, "enabled": 0, "sources": []} for kind in SOURCE_KINDS
+            kind: {"total": 0, "enabled": 0, "sources": []} for kind in supported_types()
         }
         for kind, tier, src_id, enabled, url in rows:
             if kind not in by_kind:

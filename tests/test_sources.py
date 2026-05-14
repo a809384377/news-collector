@@ -8,6 +8,7 @@ import pytest
 import yaml
 
 from newsbox import sources as ns
+from newsbox.adapters import supported_types
 
 
 # ---------- seed_sources ----------
@@ -68,20 +69,20 @@ def test_seed_sources_missing_seed(tmp_path: Path) -> None:
 def test_list_sources_real_seed() -> None:
     counts = ns.list_sources(ns.DEFAULT_SEED_PATH)
 
-    # 2 个 key 必须都在
-    assert set(counts.keys()) == {"rss", "web"}
+    # key 集合 = 所有已注册 source_type（s10 Step 0.5 起派生于 ADAPTER_REGISTRY）
+    assert set(counts.keys()) == set(supported_types())
 
-    # 与 docs/sources.seed.yaml 实际计数一致：
-    #   rss 48 / 47 启用（infoq disabled）
-    #     20 X KOL + 6 X 官方 + 4 Reddit + 2 newsletter + 4 厂商博客 +
-    #     2 status + 3 社区聚合 + 4 GitHub release atom +
-    #     3 RSSHub 厂商博客/changelog（s2-collector-resilience Step 1 迁入：
-    #     anthropic_news / anthropic_research / chatgpt_release_notes）= 48
+    # 与 src/newsbox/data/sources.seed.yaml 实际计数一致（s10 Step 6 后）：
+    #   rss 22 / 21 启用（infoq disabled）
+    #     4 Reddit + 2 newsletter + 4 厂商博客 + 2 status + 3 社区聚合 +
+    #     4 GitHub release atom + 3 RSSHub 厂商博客/changelog = 22
     #   web 4 / 3 启用（openai_api_changelog disabled）
-    #     原 7 条扣除上述 3 条迁 RSSHub = 4（claude_api / claude_product /
+    #     原 7 条扣除 3 条迁 RSSHub = 4（claude_api / claude_product /
     #     gemini_api_changelog / openai_api_changelog）
-    assert counts["rss"] == {"total": 48, "enabled": 47}
+    #   twikit 26 / 26（s10 Step 6 迁入：20 X KOL + 6 X 官方账号）
+    assert counts["rss"] == {"total": 22, "enabled": 21}
     assert counts["web"] == {"total": 4, "enabled": 3}
+    assert counts["twikit"] == {"total": 26, "enabled": 26}
 
 
 def test_list_sources_disabled_counted(tmp_path: Path) -> None:
@@ -107,7 +108,7 @@ def test_list_sources_missing_file(tmp_path: Path) -> None:
 
 
 def test_list_sources_unknown_top_keys_ignored(tmp_path: Path) -> None:
-    """顶层未识别 key 不影响；2 个 key 仍会出现。"""
+    """顶层未识别 key 不影响；已注册 source_type 仍全部出现。"""
     yaml_path = tmp_path / "sources.yaml"
     yaml_path.write_text(
         "rss:\n"
@@ -121,9 +122,14 @@ def test_list_sources_unknown_top_keys_ignored(tmp_path: Path) -> None:
 
     counts = ns.list_sources(yaml_path)
 
-    assert set(counts.keys()) == {"rss", "web"}
+    # key 集合 = 所有已注册 source_type（派生于 ADAPTER_REGISTRY）
+    assert set(counts.keys()) == set(supported_types())
     assert counts["rss"] == {"total": 1, "enabled": 1}
-    assert counts["web"] == {"total": 0, "enabled": 0}
+    # 其他已注册类型 yaml 中无对应段 → 计数全 0
+    for kind in supported_types():
+        if kind == "rss":
+            continue
+        assert counts[kind] == {"total": 0, "enabled": 0}
 
 
 def test_list_sources_invalid_yaml(tmp_path: Path) -> None:
@@ -145,10 +151,11 @@ def test_iter_sources_real_seed_count_matches_list() -> None:
     expected_total = sum(c["enabled"] for c in counts.values())
     assert len(items) == expected_total
 
-    # 每条都有 source_type 字段且取值合法
+    # 每条都有 source_type 字段且取值合法（派生于 ADAPTER_REGISTRY）
+    valid_types = set(supported_types())
     for item in items:
         assert "source_type" in item
-        assert item["source_type"] in {"rss", "web"}
+        assert item["source_type"] in valid_types
         assert "id" in item
 
 

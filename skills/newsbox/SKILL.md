@@ -58,7 +58,14 @@ newsbox sources add --from-file=urls.txt
 - `--tier`: `official_first_party` / `kol` / `secondary`（信源权重，影响消费方打分）
 - `--domain`: `ai` 是默认；未来可能 `finance` 等（多领域设计）
 - `--id`: 信源唯一 id，建议小写下划线（如 `simon_willison_blog`）
-- `--type`: `rss` / `web`（一般不传，靠 probe 自动判定；探测不准时手动覆盖）
+- `--type`: `rss` / `web` / `twikit`（一般不传，靠 probe 自动判定；探测不准时手动覆盖）
+
+**X (Twitter) 账号特殊**：录 X 账号 URL（`https://x.com/<handle>` / `https://twitter.com/<handle>`）会被 probe 自动识别为 `twikit` 类型，`url` 字段自动归一化为裸 handle（`dotey` 而非完整 URL）。例：
+```bash
+newsbox sources add https://x.com/dotey --tier=kol --id=x_dotey
+# yaml 落地：twikit 段下 url: "dotey"
+```
+首次配置 X 信源前需生成 `~/.newsbox/twikit_cookies.json`（含 `auth_token` + `ct0`），步骤见 [docs/twikit-setup.md](../../docs/twikit-setup.md) §1。
 
 ### 录入前先侦察
 ```bash
@@ -261,7 +268,13 @@ newsbox setup             # 自动补齐 compose 文件 + 启容器（幂等）
 4. 抓到内容但入库 0 条 → 多半是去重命中（同一信源相同 external_id 不重复入）
 5. 扩大窗口仍异常 → 看 `newsbox logs --tail=100` 与 adapter 真实样本，再下 bug 结论（不要凭"页面看着有内容"就判 adapter 错）
 
-**X / Twitter 信源失败** —— `~/.newsbox/.env` 里 `TWITTER_AUTH_TOKEN` 失效，更新后跑 `restart`。
+**X / Twitter 信源失败** —— v1.1.0 起 X 走 twikit（cookie-based），不再依赖 `.env` 的 `TWITTER_AUTH_TOKEN`。`newsbox doctor` 看 `[Twikit]` panel：
+- `twikit cookies 文件不存在` → 按 [docs/twikit-setup.md](../../docs/twikit-setup.md) §1 生成 `~/.newsbox/twikit_cookies.json`
+- `缺少 auth_token / ct0 字段` → 重新从浏览器 devtools 复制填入
+- fetch 时报 `TwikitAuthError`（401） → auth_token 失效，重新复制（一般数月才失效一次）
+- 报 `TwikitRateLimitError`（429） → X 限流，几小时后再试
+- 报 `TwikitUserUnavailableError` → 账号不存在/被封，检查 url 字段拼写
+完整失败矩阵见 [docs/twikit-setup.md](../../docs/twikit-setup.md) §3。
 
 ---
 
@@ -290,9 +303,10 @@ newsbox config show         # 看当前生效配置
 ```
 
 `~/.newsbox/` 是运行时数据目录（不在项目里）：
-- `sources.yaml` — 信源清单
+- `sources.yaml` — 信源清单（顶层 `rss` / `web` / `twikit` 三类）
 - `config.yaml` — CLI / 抓取参数配置（含 `thresholds.cli_read_warn` 覆盖 read 阈值默认 10000）
-- `.env` — `TWITTER_AUTH_TOKEN` 等密钥
+- `.env` — `TWITTER_AUTH_TOKEN`（容器内 RSSHub 兜底；X 主路径已走 twikit）
+- `twikit_cookies.json` — X 浏览器 cookies（v1.1.0+，auth_token + ct0；setup 生成同名 `.example.json` 模板）
 - `raw.db` — SQLite 采集库
 - `docker-compose.yml` — RSSHub + Redis 容器配置（v0.5.1 起）
 - `logs/newsbox.log` — 日志

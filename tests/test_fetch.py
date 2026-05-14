@@ -672,6 +672,238 @@ def test_run_fetch_skip_url_dedup_allows_same_canonical(tmp_path: Path) -> None:
         conn.close()
 
 
+# ---- twikit 桶派生（s10 Step 1）---------------------------------------------
+
+
+def test_run_fetch_three_type_buckets_routed_by_registry(tmp_path: Path) -> None:
+    """sources.yaml 含 rss + web + twikit 三段时，pipeline 通过 ADAPTER_REGISTRY
+    派生分桶：三类 adapter 都被调过，各自的 RawArticle 都按 source_type 落库。
+
+    本用例锁住 s10 Step 0.5 重构：pipeline 不再硬编码 rss / web，
+    新增第 3 类（twikit）通过注入的 adapter_registry 即被自动识别 & 分桶。
+    """
+    db_path = _setup_db(tmp_path)
+    yaml_path = _setup_sources_yaml(
+        tmp_path,
+        content=(
+            "rss:\n"
+            "  - id: feed_a\n"
+            "    url: https://a.com/feed\n"
+            "    tier: kol\n"
+            "  - id: feed_b\n"
+            "    url: https://b.com/feed\n"
+            "    tier: secondary\n"
+            "web:\n"
+            "  - id: anthropic_news\n"
+            "    url: https://www.anthropic.com/news\n"
+            "    tier: official_first_party\n"
+            "twikit:\n"
+            "  - id: x_karpathy\n"
+            "    handle: karpathy\n"
+            "    tier: kol\n"
+            "  - id: x_simonw\n"
+            "    handle: simonw\n"
+            "    tier: kol\n"
+        ),
+    )
+    cfg = _make_config()
+    # twikit 桶限速 / 并发用兜底（registry 未在 _DEFAULT 显式枚举的 source_type
+    # 落到 _bucket_params 兜底分支：conc=1 / rate=1）；显式设为 0 加速测试。
+    cfg.fetch.per_source_rate_limit_seconds = {"rss": 0, "web": 0, "twikit": 0}
+
+    # 用按 source_id 路由的 stub：每个源得到自己专属的 article 列表（避免
+    # 同桶内多源共享一份 list → external_id 撞库 dup_external）。
+    rss_per_source = {
+        "feed_a": [
+            _make_article("feed_a", "rss-a-1", "https://a.com/p1", source_type="rss"),
+        ],
+        "feed_b": [
+            _make_article("feed_b", "rss-b-1", "https://b.com/p1", source_type="rss"),
+        ],
+    }
+    web_per_source = {
+        "anthropic_news": [
+            _make_article(
+                "anthropic_news",
+                "anthropic-news-1",
+                "https://www.anthropic.com/news/post-1",
+                source_type="web",
+            ),
+        ],
+    }
+    twikit_per_source = {
+        "x_karpathy": [
+            _make_article(
+                "x_karpathy",
+                "1791234567890123456",
+                "https://x.com/karpathy/status/1791234567890123456",
+                source_type="twikit",
+            ),
+            _make_article(
+                "x_karpathy",
+                "1791234567890123457",
+                "https://x.com/karpathy/status/1791234567890123457",
+                source_type="twikit",
+            ),
+        ],
+        "x_simonw": [
+            _make_article(
+                "x_simonw",
+                "1791234567890123999",
+                "https://x.com/simonw/status/1791234567890123999",
+                source_type="twikit",
+            ),
+            _make_article(
+                "x_simonw",
+                "1791234567890124000",
+                "https://x.com/simonw/status/1791234567890124000",
+                source_type="twikit",
+            ),
+        ],
+    }
+
+    class _RoutingStub:
+        """按 source_id 路由的 adapter stub（避免同桶多源共享 article 列表）。"""
+
+        def __init__(self, mapping: dict[str, list[RawArticle]]) -> None:
+            self._mapping = mapping
+
+        @classmethod
+        def factory(cls, mapping: dict[str, list[RawArticle]]):
+            def make() -> "_RoutingStub":
+                return cls(mapping)
+            return make
+
+        async def fetch(
+            self, source: dict[str, Any], since: datetime | None
+        ) -> list[RawArticle]:
+            return list(self._mapping.get(source["id"], []))
+
+    summary = _run(
+        fetch_module.run_fetch(
+            tmp_path,
+            db_path=db_path,
+            sources_yaml=yaml_path,
+            config=cfg,
+            adapter_registry={
+                "rss": _RoutingStub.factory(rss_per_source),
+                "web": _RoutingStub.factory(web_per_source),
+                "twikit": _RoutingStub.factory(twikit_per_source),
+            },
+        )
+    )
+
+    # 4 个源（2 rss + 1 web + 2 twikit）都跑过，没人 skip / error
+    assert len(summary.results) == 5
+    for r in summary.results:
+        assert r.skipped is False, f"{r.source_type}:{r.source_id} 不应 skip"
+        assert r.error is None, f"{r.source_type}:{r.source_id} error={r.error}"
+
+    # 各桶被分组正确：通过结果中 source_type 计数 + DB 行数双重验证
+    by_type: dict[str, int] = {}
+    for r in summary.results:
+        by_type[r.source_type] = by_type.get(r.source_type, 0) + 1
+    assert by_type == {"rss": 2, "web": 1, "twikit": 2}
+
+    conn = db_module.get_conn(db_path)
+    try:
+        cur = conn.execute(
+            "SELECT source_type, count(*) FROM articles_raw GROUP BY source_type"
+        )
+        counts = dict(cur.fetchall())
+        # 每个 source_type 写入条数 = 对应 adapter 返回数量
+        # rss: 2 源 × 1 条 = 2；web: 1 源 × 1 条 = 1；twikit: 2 源 × 2 条 = 4
+        assert counts.get("rss") == 2
+        assert counts.get("web") == 1
+        assert counts.get("twikit") == 4
+    finally:
+        conn.close()
+
+
+def test_run_fetch_twikit_end_to_end_persists_articles_and_state(
+    tmp_path: Path,
+) -> None:
+    """mock TwikitAdapter 返回 2 条 RawArticle，跑完后 articles_raw + source_state
+    双写正确：articles 2 行 source_type='twikit'；source_state 1 行 consecutive_failures=0。
+    """
+    db_path = _setup_db(tmp_path)
+    yaml_path = _setup_sources_yaml(
+        tmp_path,
+        content=(
+            "twikit:\n"
+            "  - id: x_test\n"
+            "    handle: test_user\n"
+            "    tier: kol\n"
+            "    domain: [ai]\n"
+        ),
+    )
+    cfg = _make_config()
+    cfg.fetch.per_source_rate_limit_seconds = {"rss": 0, "web": 0, "twikit": 0}
+
+    tweets = [
+        RawArticle(
+            source_type="twikit",
+            source_id="x_test",
+            external_id="1791000000000000001",
+            url="https://x.com/test_user/status/1791000000000000001",
+            title="First tweet",
+            body="First tweet body",
+            published_at=datetime(2026, 5, 10, 9, 0, 0, tzinfo=timezone.utc),
+        ),
+        RawArticle(
+            source_type="twikit",
+            source_id="x_test",
+            external_id="1791000000000000002",
+            url="https://x.com/test_user/status/1791000000000000002",
+            title="Second tweet",
+            body="Second tweet body",
+            published_at=datetime(2026, 5, 10, 10, 0, 0, tzinfo=timezone.utc),
+        ),
+    ]
+
+    summary = _run(
+        fetch_module.run_fetch(
+            tmp_path,
+            db_path=db_path,
+            sources_yaml=yaml_path,
+            config=cfg,
+            adapter_registry={"twikit": StubAdapter.factory(tweets)},
+        )
+    )
+
+    assert len(summary.results) == 1
+    r = summary.results[0]
+    assert r.source_type == "twikit"
+    assert r.source_id == "x_test"
+    assert r.fetched == 2
+    assert r.inserted == 2
+    assert r.error is None
+    assert r.skipped is False
+    assert summary.total_inserted == 2
+
+    conn = db_module.get_conn(db_path)
+    try:
+        # articles_raw: 2 行 twikit
+        cur = conn.execute(
+            "SELECT count(*) FROM articles_raw WHERE source_type='twikit'"
+        )
+        assert cur.fetchone()[0] == 2
+
+        # source_state: 1 行 twikit / x_test，consecutive_failures=0，
+        # last_success_external_id 是 published_at 最新的那条
+        cur = conn.execute(
+            "SELECT consecutive_failures, last_success_external_id, last_error "
+            "FROM source_state WHERE source_type='twikit' AND source_id='x_test'"
+        )
+        row = cur.fetchone()
+        assert row is not None
+        assert row[0] == 0
+        assert row[1] == "1791000000000000002"  # 最新 published_at 那条
+        assert row[2] is None
+    finally:
+        conn.close()
+
+
 def test_run_fetch_filters_by_type(tmp_path: Path) -> None:
     db_path = _setup_db(tmp_path)
     yaml_path = _setup_sources_yaml(

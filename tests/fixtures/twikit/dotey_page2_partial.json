@@ -1,0 +1,22 @@
+[
+  {
+    "id": "2053987620732944900",
+    "text": "Still within the window — should be ingested.",
+    "created_at": "Mon May 09 08:00:00 +0000 2026",
+    "lang": "en",
+    "_data": {
+      "note_tweet": null,
+      "article": null
+    }
+  },
+  {
+    "id": "2053987620732944901",
+    "text": "Older than since cutoff — should be skipped and trigger out_of_window break.",
+    "created_at": "Wed Apr 01 12:00:00 +0000 2026",
+    "lang": "en",
+    "_data": {
+      "note_tweet": null,
+      "article": null
+    }
+  }
+]

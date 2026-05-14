@@ -27,8 +27,7 @@ from typing import Any
 from loguru import logger
 
 from .. import db as db_module
-from ..adapters.rss_adapter import RSSAdapter
-from ..adapters.web_adapter import WebAdapter
+from ..adapters import ADAPTER_REGISTRY
 from ..config import AppConfig, load_config
 from ..models import RawArticle
 from ..sources import iter_sources
@@ -38,13 +37,10 @@ from ..utils.url import canonicalize_url, content_hash, url_canonical_hash  # no
 # ---- 适配器路由 -------------------------------------------------------------
 
 
-# 2 类适配器（s2-1-collector-extract Step 4 收敛后）：
-#   rss : feedparser 兜底（含 X via RSSHub / Reddit .rss / GitHub releases.atom / 厂商 RSS）
-#   web : trafilatura + Jina 兜底（默认列表两级模式；mode=changelog_page 走单页切段）
-ADAPTER_REGISTRY: dict[str, Any] = {
-    "rss": RSSAdapter,
-    "web": WebAdapter,
-}
+# ``ADAPTER_REGISTRY`` 来自 ``newsbox.adapters.registry``（s10 解耦审查后的单一真相源）：
+#   rss    : feedparser 兜底（含 RSSHub-翻译的 Reddit / GitHub releases.atom / 厂商 RSS）
+#   web    : trafilatura + Jina 兜底（默认列表两级；mode=changelog_page 单页切段）
+#   twikit : (s10) cookie + GraphQL 直连 X，独立 ct0 rotation 与限速
 
 # 保留常量便于以后扩展（如未来新增 source_type 临时占位）；当前为空。
 DEFERRED_SOURCE_TYPES: frozenset[str] = frozenset()
@@ -393,31 +389,44 @@ async def run_fetch(
     db_module.init_db(db_p)
     conn = db_module.get_conn(db_p)
     try:
-        # 按 source_type 分桶；保留原 yaml 顺序便于 CLI 输出对齐
-        bucket_rss = [s for s in target if s["source_type"] == "rss"]
-        bucket_web = [s for s in target if s["source_type"] == "web"]
+        # 按 source_type 分桶；保留 ``registry`` 插入顺序便于 CLI 输出对齐
+        # （rss 段 → web 段 → 后续注册类型尾部追加）
+        buckets: dict[str, list[dict[str, Any]]] = {
+            st: [s for s in target if s["source_type"] == st] for st in registry
+        }
 
-        rss_conc = concurrency if concurrency is not None else cfg.fetch.concurrency.get("rss", 8)
-        web_conc = cfg.fetch.concurrency.get("web", 1)
-        rss_rate = cfg.fetch.per_source_rate_limit_seconds.get("rss", 1)
-        web_rate = cfg.fetch.per_source_rate_limit_seconds.get("web", 2)
+        # 每桶并发/限速：从配置 dict 取，缺失类型走兜底（rss / web 数值保持
+        # 向后兼容，未来新 source_type 在 config.default.yaml 显式配置即可）
+        _DEFAULT_CONC = {"rss": 8, "web": 1}
+        _DEFAULT_RATE = {"rss": 1, "web": 2}
 
-        # 两桶外层并行启动；rss 内部 Semaphore 限并发，web 桶串行（concurrency=1）
-        rss_task = _run_bucket(
-            bucket_rss,
-            concurrency=rss_conc, rate_limit_seconds=rss_rate,
-            conn=conn, since=since, config=cfg,
-            source_filter=source_filter, adapter_registry=registry,
+        def _bucket_params(st: str) -> tuple[int, int]:
+            if st == "rss" and concurrency is not None:
+                conc = concurrency
+            else:
+                conc = cfg.fetch.concurrency.get(st, _DEFAULT_CONC.get(st, 1))
+            rate = cfg.fetch.per_source_rate_limit_seconds.get(
+                st, _DEFAULT_RATE.get(st, 1)
+            )
+            return conc, rate
+
+        async def _bucket_task(st: str) -> list[SourceFetchResult]:
+            conc, rate = _bucket_params(st)
+            return await _run_bucket(
+                buckets[st],
+                concurrency=conc, rate_limit_seconds=rate,
+                conn=conn, since=since, config=cfg,
+                source_filter=source_filter, adapter_registry=registry,
+            )
+
+        # 所有桶外层并行；同桶内按 ``concurrency`` 限并发
+        bucket_results = await asyncio.gather(
+            *(_bucket_task(st) for st in buckets)
         )
-        web_task = _run_bucket(
-            bucket_web,
-            concurrency=web_conc, rate_limit_seconds=web_rate,
-            conn=conn, since=since, config=cfg,
-            source_filter=source_filter, adapter_registry=registry,
-        )
-        rss_results, web_results = await asyncio.gather(rss_task, web_task)
-        # 输出顺序：rss 段在前，web 段在后（与原 yaml 顺序一致）
-        results: list[SourceFetchResult] = list(rss_results) + list(web_results)
+        # 输出顺序：按 registry 插入序拼接
+        results: list[SourceFetchResult] = []
+        for r in bucket_results:
+            results.extend(r)
     finally:
         conn.close()
 

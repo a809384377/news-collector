@@ -22,8 +22,7 @@ from typing import Any
 
 import typer
 
-from ...adapters.rss_adapter import RSSAdapter
-from ...adapters.web_adapter import WebAdapter
+from ...adapters import ADAPTER_REGISTRY
 from ...models import RawArticle
 from .._helpers import home_option
 from .._json import emit, emit_err, json_option
@@ -34,12 +33,11 @@ _BODY_PREVIEW_MAX = 200
 
 
 def _build_adapter(kind: str) -> Any:
-    """按 kind 构造 adapter；测试可 monkeypatch 本函数返回 fake adapter。"""
-    if kind == "rss":
-        return RSSAdapter()
-    if kind == "web":
-        return WebAdapter()
-    raise ValueError(f"unknown kind: {kind}")
+    """按 kind 从 ``ADAPTER_REGISTRY`` 构造 adapter；测试可 monkeypatch 本函数返回 fake adapter。"""
+    adapter_cls = ADAPTER_REGISTRY.get(kind)
+    if adapter_cls is None:
+        raise ValueError(f"unknown kind: {kind}")
+    return adapter_cls()
 
 
 def _format_optional(value: str | None) -> str:

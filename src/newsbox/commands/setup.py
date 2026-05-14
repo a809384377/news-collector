@@ -6,9 +6,10 @@
 2. 拷 ``docs/sources.seed.yaml`` → ``home/sources.yaml``（缺则拷）
 3. 拷包内 ``docker-compose.yml`` → ``home/docker-compose.yml``（缺则拷）
 4. 写 ``home/.env`` 模板（缺则建，含 ``TWITTER_AUTH_TOKEN=`` 占位）
-5. 交互引导填 X token（检测 ``TWITTER_AUTH_TOKEN`` 为空时；用户敲回车跳过）
-6. ``docker compose up -d``（容器都 Up 则 skip）
-7. ``init_db``（apply_migrations 幂等：已应用迁移自动跳过）
+5. 写 ``home/twikit_cookies.example.json`` 模板（缺则建；不阻塞，用户可后填）
+6. 交互引导填 X token（检测 ``TWITTER_AUTH_TOKEN`` 为空时；用户敲回车跳过）
+7. ``docker compose up -d``（容器都 Up 则 skip）
+8. ``init_db``（apply_migrations 幂等：已应用迁移自动跳过）
 
 设计取舍：
 - 不提供 ``--force`` / ``--reset``（DECISIONS.md D3：与 teardown 不提供 ``--purge``
@@ -23,6 +24,7 @@
 """
 from __future__ import annotations
 
+import json
 from importlib.resources import files
 from pathlib import Path
 
@@ -40,6 +42,19 @@ _ENV_TEMPLATE = f"{_TOKEN_KEY}=\n"
 # 子目录列表：home 自身 + 三个子目录都要存在（logs 落日志 / cache 复用预留 /
 # rsshub 是 docker-compose.yml 中 redis-data 的挂载父）
 _SUBDIRS: tuple[str, ...] = ("logs", "cache", "rsshub")
+
+# twikit cookies 模板（D-auth-1 / D-auth-2：用户首次手填 auth_token + ct0 两个值）
+_TWIKIT_COOKIES_EXAMPLE_FILENAME = "twikit_cookies.example.json"
+_TWIKIT_COOKIES_REAL_FILENAME = "twikit_cookies.json"
+_TWIKIT_COOKIES_EXAMPLE_PAYLOAD = {
+    "_comment": (
+        "首次配置：从浏览器 devtools (F12 → Application → Cookies → x.com) "
+        "复制 auth_token + ct0 两个值，把本文件复制为 twikit_cookies.json 并填入。"
+        "详见 docs/twikit-setup.md §1。后续 ct0 由程序自动 rotation，无需再碰。"
+    ),
+    "auth_token": "<paste here>",
+    "ct0": "<paste here>",
+}
 
 
 # ---- 步骤分子函数 ----------------------------------------------------------
@@ -87,6 +102,25 @@ def _ensure_env_file(home: Path) -> bool:
     if env_path.exists():
         return False
     env_path.write_text(_ENV_TEMPLATE, encoding="utf-8")
+    return True
+
+
+def _ensure_twikit_cookies_example(home: Path) -> bool:
+    """写 ``twikit_cookies.example.json`` 模板。返回 True 若有写入。
+
+    设计取舍：
+        - 不强制要求用户立即填 ``twikit_cookies.json``（可能用户当前不用 twikit）
+        - example 文件作"配置文档"用，给用户清晰的填充指引
+        - 不阻塞 setup 流程；twikit 信源没 cookies 时由 ``doctor`` / 实际 fetch
+          抛 ``TwikitAuthError`` 给可执行恢复指引
+    """
+    target = home / _TWIKIT_COOKIES_EXAMPLE_FILENAME
+    if target.exists():
+        return False
+    target.write_text(
+        json.dumps(_TWIKIT_COOKIES_EXAMPLE_PAYLOAD, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
     return True
 
 
@@ -251,7 +285,30 @@ def setup_cmd(
     else:
         typer.echo("  [skip] .env already exists")
 
-    # 5. X token 引导（--json 模式隐含 --yes：跳过 prompt，标 token_skipped）
+    # 5. twikit cookies example 模板（不阻塞，提示用户后填）
+    cookies_done = _ensure_twikit_cookies_example(home)
+    cookies_real_present = (home / _TWIKIT_COOKIES_REAL_FILENAME).exists()
+    if json_output:
+        steps.append(
+            {
+                "name": "twikit_cookies_example",
+                "action": "do" if cookies_done else "skip",
+                "real_present": cookies_real_present,
+            }
+        )
+    elif cookies_done:
+        typer.echo(
+            f"  [do]   twikit cookies example → {home}/{_TWIKIT_COOKIES_EXAMPLE_FILENAME}"
+        )
+        if not cookies_real_present:
+            typer.echo(
+                f"         （需要 X 信源时：复制为 {_TWIKIT_COOKIES_REAL_FILENAME} 并填入"
+                " auth_token + ct0；详见 docs/twikit-setup.md）"
+            )
+    else:
+        typer.echo("  [skip] twikit_cookies.example.json already exists")
+
+    # 6. X token 引导（--json 模式隐含 --yes：跳过 prompt，标 token_skipped）
     token_state = _guide_token(home, suppress_prompt=json_output)
     if json_output:
         steps.append(
@@ -271,7 +328,7 @@ def setup_cmd(
             f"稍后填 {home}/.env"
         )
 
-    # 6. 容器
+    # 7. 容器
     try:
         cstate = _ensure_containers(home)
     except docker_helpers.DockerError as exc:
@@ -291,7 +348,7 @@ def setup_cmd(
     else:
         typer.echo("  [do]   docker compose up -d")
 
-    # 7. db init
+    # 8. db init
     db_done = _ensure_db(home)
     if json_output:
         steps.append({"name": "db", "action": "do" if db_done else "skip"})

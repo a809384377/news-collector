@@ -10,6 +10,7 @@ import pytest
 
 from newsbox.commands.sources._probe import (
     ProbeResult,
+    _twikit_predicate,
     probe,
     suggest_id,
 )
@@ -275,3 +276,71 @@ def test_probe_returns_dataclass_instance() -> None:
     # frozen dataclass：尝试改字段抛 FrozenInstanceError
     with pytest.raises(Exception):
         res.url = "other"  # type: ignore[misc]
+
+
+# ---------- twikit prober（host-based 判定，s10 新增） ----------
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://x.com/dotey",
+        "https://twitter.com/dotey",
+        "https://mobile.twitter.com/dotey",
+        "https://www.x.com/dotey",  # www 前缀也接受
+        "https://x.com/dotey/status/1234567",
+    ],
+)
+def test_twikit_predicate_matches_x_hosts(url: str) -> None:
+    """X 系列 host（含 www. 前缀 / 推文级 URL） → True。"""
+    assert _twikit_predicate("text/html", "", url) is True
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://example.com/feed",
+        "https://nitter.net/dotey",  # 第三方镜像不算 twikit
+        "https://t.co/abc",          # 短链域名不算
+        "https://blog.twitter.com/news",  # 子域名（非 mobile.）不算
+        "",
+        "not-a-url",
+    ],
+)
+def test_twikit_predicate_rejects_non_x_hosts(url: str) -> None:
+    assert _twikit_predicate("text/html", "", url) is False
+
+
+def test_probe_x_url_returns_type_twikit_via_host(
+) -> None:
+    """probe 走 ``https://x.com/dotey`` → type=twikit, suggested_id=x_dotey。
+
+    即便 X 返回的是反爬 HTML（不像 RSS feed），host-based 判定仍能稳定输出
+    twikit；suggested_id 从 host 主体 + path 段拼出 ``x_dotey``。
+    """
+    url = "https://x.com/dotey"
+    # 模拟 X 真实响应：HTML（反爬常态）
+    client = _make_client(
+        _route({url: (200, "text/html; charset=utf-8", HTML_BODY)})
+    )
+
+    async def go():
+        try:
+            return await probe(url, client=client)
+        finally:
+            await client.aclose()
+
+    res = _run(go())
+    assert res.reachable is True
+    assert res.source_type == "twikit"
+    assert res.suggested_id == "x_dotey"
+
+
+def test_suggest_id_for_x_dotey() -> None:
+    """``https://x.com/dotey`` → ``x_dotey``（host 主体 ``x`` + path ``dotey``）。"""
+    assert suggest_id("https://x.com/dotey") == "x_dotey"
+
+
+def test_suggest_id_for_twitter_handle() -> None:
+    """``https://twitter.com/karpathy`` → ``twitter_karpathy``（host 主体是 twitter）。"""
+    assert suggest_id("https://twitter.com/karpathy") == "twitter_karpathy"

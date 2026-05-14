@@ -1,0 +1,23 @@
+[
+  {
+    "id": "2070000000000000001",
+    "text": "Wrote a new long-form article on training dynamics. Link in thread.",
+    "created_at": "Mon May 11 15:00:00 +0000 2026",
+    "lang": "en",
+    "_data": {
+      "note_tweet": null,
+      "article": {
+        "id": "art-1",
+        "title": "Notes on training dynamics",
+        "article_results": {
+          "result": {
+            "id": "art-result-1",
+            "content_state": {
+              "text": "This is the full canonical article body extracted from tweet._data['article']['article_results']['result']['content_state']['text']. It should be picked up as body since tweet.text is a short summary and there is no note_tweet payload. is_long_form should classify to 'article'."
+            }
+          }
+        }
+      }
+    }
+  }
+]

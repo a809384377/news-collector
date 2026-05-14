@@ -8,7 +8,7 @@ s4-sources-management Step 2 产出。Step 4 契约冻结后本模块公开 API 
 异常
 ----
 - ``SourceIdConflictError``  upsert 时 id 已存在
-- ``SourceKindError``        kind 不是 rss/web
+- ``SourceKindError``        kind 不在已注册 ``ADAPTER_REGISTRY`` 类型集合内
 
 函数
 ----
@@ -17,7 +17,7 @@ s4-sources-management Step 2 产出。Step 4 契约冻结后本模块公开 API 
 - ``save_yaml(path, data) -> None``
     写回 sources.yaml；保留 round-trip 注释与原顺序
 - ``find_source(data, source_id) -> tuple[str, int, dict] | None``
-    跨 rss/web 类查找；返回 ``(kind, idx, item)`` 或 None
+    跨所有已注册 source_type 查找；返回 ``(kind, idx, item)`` 或 None
 - ``upsert_source(data, kind, item) -> None``
     新增条目；id 全局唯一冲突抛 ``SourceIdConflictError``；kind 缺失自动建空列表
 - ``remove_source(data, source_id) -> bool``
@@ -61,8 +61,12 @@ from typing import Callable
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
-# 顶层 2 类固定顺序（与 newsbox.sources.SOURCE_KINDS 对齐）
-SOURCE_KINDS: tuple[str, ...] = ("rss", "web")
+from ...adapters import supported_types
+
+# 与 ``newsbox.sources.SOURCE_KINDS`` 同源（``ADAPTER_REGISTRY`` 派生）；
+# 导入时绑定，向后兼容名字。函数内部一律调 ``supported_types()`` 实时派生
+# 以兼容测试 mock 第 3 类 adapter 的场景。
+SOURCE_KINDS: tuple[str, ...] = supported_types()
 
 
 class SourceIdConflictError(ValueError):
@@ -70,7 +74,7 @@ class SourceIdConflictError(ValueError):
 
 
 class SourceKindError(ValueError):
-    """kind 不是 rss / web。"""
+    """kind 不在已注册的 ``ADAPTER_REGISTRY`` 类型集合内。"""
 
 
 def _yaml() -> YAML:
@@ -117,11 +121,11 @@ def save_yaml(path: Path, data: CommentedMap) -> None:
 def find_source(
     data: CommentedMap, source_id: str
 ) -> tuple[str, int, dict] | None:
-    """跨 ``SOURCE_KINDS`` 查找 ``source_id``；命中返回 ``(kind, idx, item)``。
+    """跨所有已注册 source_type 查找 ``source_id``；命中返回 ``(kind, idx, item)``。
 
     item 是底层 ``CommentedMap``，原地修改会被 ``save_yaml`` 持久化。
     """
-    for kind in SOURCE_KINDS:
+    for kind in supported_types():
         items = data.get(kind) or []
         if not isinstance(items, list):
             continue
@@ -134,14 +138,15 @@ def find_source(
 def upsert_source(data: CommentedMap, kind: str, item: dict) -> None:
     """追加条目到 ``kind`` 类列表末尾。
 
-    - kind 必须 ∈ ``SOURCE_KINDS``；否则抛 ``SourceKindError``
+    - kind 必须 ∈ 已注册 source_type；否则抛 ``SourceKindError``
     - item 必须有非空 ``id`` 字段；否则抛 ``ValueError``
-    - id 全局唯一（跨 rss/web）；冲突抛 ``SourceIdConflictError``
+    - id 全局唯一（跨所有类型）；冲突抛 ``SourceIdConflictError``
     - 若 ``data`` 中尚无 kind 键，自动建空 ``CommentedSeq``
     """
-    if kind not in SOURCE_KINDS:
+    kinds = supported_types()
+    if kind not in kinds:
         raise SourceKindError(
-            f"unknown source kind: {kind!r}; expected one of {SOURCE_KINDS}"
+            f"unknown source kind: {kind!r}; expected one of {kinds}"
         )
     src_id = item.get("id")
     if not src_id:

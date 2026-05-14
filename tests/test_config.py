@@ -31,7 +31,10 @@ def test_load_config_pure_default(tmp_path: Path) -> None:
     assert config.fetch.per_source_rate_limit_seconds == {
         "rss": 1,
         "web": 2,
+        "twikit": 2,
     }
+    assert config.fetch.concurrency == {"rss": 8, "web": 1, "twikit": 1}
+    assert config.fetch.twikit.max_pages == 5
     assert config.fetch.http_retry.max_attempts == 4
     assert config.fetch.http_retry.backoff_base_seconds == 1
     assert config.fetch.consecutive_failure_skip == 3
@@ -76,6 +79,7 @@ def test_load_config_user_override_nested_dict(tmp_path: Path) -> None:
     assert config.fetch.per_source_rate_limit_seconds == {
         "rss": 1,
         "web": 5,  # 被覆盖
+        "twikit": 2,  # 默认保留
     }
     # 兄弟字段未动
     assert config.fetch.default_since == "24h"

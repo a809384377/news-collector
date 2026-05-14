@@ -1,10 +1,11 @@
 """信源清单 seed/list/iter 逻辑。
 
 - ``seed_sources``  把 sources.seed.yaml 拷到 ~/.newsbox/sources.yaml
-- ``list_sources``  按 2 类（rss/web）统计条目数与启用数
+- ``list_sources``  按已注册 source_type 统计条目数与启用数
 - ``iter_sources``  返回完整条目列表（带 source_type 字段，已 enabled 过滤）— fetch 编排消费
 
 模块独立：不依赖 newsbox.config / newsbox.cli，便于薄封装与测试。
+source_type 集合 = ``adapters.ADAPTER_REGISTRY`` 单一真相源（运行时派生）。
 """
 
 from __future__ import annotations
@@ -15,6 +16,8 @@ from pathlib import Path
 
 import yaml
 
+from .adapters import supported_types
+
 # 种子清单作为 package data 内置（``newsbox.data``）；pipx / uv tool install
 # 装到任意目录都能找到。``docs/sources.seed.yaml`` 是该文件的对外可读镜像，由 README
 # 引用（s6-distribution-package 引入双副本，后续 sprint 统一）。
@@ -22,8 +25,9 @@ DEFAULT_SEED_PATH = Path(
     str(files("newsbox.data").joinpath("sources.seed.yaml"))
 )
 
-# 2 类信源固定顺序（list_sources 输出 key 集稳定）
-SOURCE_KINDS: tuple[str, ...] = ("rss", "web")
+# 已注册 source_type 固定顺序（list_sources 输出 key 集稳定）；
+# 向后兼容名字，导入时绑定 — 函数内部一律调 ``supported_types()`` 派生以兼容测试 mock。
+SOURCE_KINDS: tuple[str, ...] = supported_types()
 
 
 def seed_sources(
@@ -65,13 +69,14 @@ def seed_sources(
 
 
 def list_sources(yaml_path: Path) -> dict[str, dict[str, int]]:
-    """读取 sources.yaml，按 2 类统计条目数与启用数。
+    """读取 sources.yaml，按已注册 source_type 统计条目数与启用数。
 
-    输出结构（2 个 key 必出现，缺失类填 0）::
+    输出结构（每个已注册 source_type 必出现，缺失类填 0）::
 
         {
-            "rss": {"total": 45, "enabled": 44},
-            "web": {"total":  7, "enabled":  6},
+            "rss":    {"total": 45, "enabled": 44},
+            "web":    {"total":  7, "enabled":  6},
+            "twikit": {"total": 26, "enabled": 26},
         }
 
     enabled 计数规则：条目缺 ``enabled`` 字段视为启用（与设计 §7.1 保持一致）。
@@ -81,7 +86,7 @@ def list_sources(yaml_path: Path) -> dict[str, dict[str, int]]:
         yaml_path: sources.yaml 路径。
 
     Returns:
-        ``dict[str, dict[str, int]]``，固定 2 个 key。
+        ``dict[str, dict[str, int]]``，key 集合 = ``supported_types()``。
 
     Raises:
         FileNotFoundError: yaml 文件不存在。
@@ -97,11 +102,11 @@ def list_sources(yaml_path: Path) -> dict[str, dict[str, int]]:
     if data is None:
         data = {}
     if not isinstance(data, dict):
-        # YAML 顶层必须是 mapping；否则按空处理（5 类全 0）
+        # YAML 顶层必须是 mapping；否则按空处理（所有类型计数全 0）
         data = {}
 
     result: dict[str, dict[str, int]] = {}
-    for kind in SOURCE_KINDS:
+    for kind in supported_types():
         items = data.get(kind) or []
         if not isinstance(items, list):
             items = []
@@ -121,8 +126,9 @@ def list_sources(yaml_path: Path) -> dict[str, dict[str, int]]:
 def iter_sources(yaml_path: Path) -> list[dict]:
     """返回 sources.yaml 所有 enabled 条目，每个 dict 注入 ``source_type`` 字段。
 
-    返回顺序：2 类按 ``SOURCE_KINDS`` 固定顺序（rss → web），组内保持 yaml 原顺序。
-    enabled=false 的条目跳过；其余字段（id / url / tier / 类型特有字段）原样保留。
+    返回顺序：按 ``supported_types()`` 顺序（与 ``ADAPTER_REGISTRY`` 插入序一致），
+    组内保持 yaml 原顺序。enabled=false 的条目跳过；其余字段（id / url / tier /
+    类型特有字段）原样保留。
 
     示例返回（截断）::
 
@@ -146,7 +152,7 @@ def iter_sources(yaml_path: Path) -> list[dict]:
         data = {}
 
     out: list[dict] = []
-    for kind in SOURCE_KINDS:
+    for kind in supported_types():
         items = data.get(kind) or []
         if not isinstance(items, list):
             continue

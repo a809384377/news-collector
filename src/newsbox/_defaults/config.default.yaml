@@ -3,12 +3,20 @@ fetch:
   per_source_rate_limit_seconds:
     rss: 1
     web: 2
-  # 同类型并发度（s2-collector-resilience Step 4）：rss 8 路并发保护 RSSHub
-  # 容器 + X token 限速；web 永远串行（爬虫友好，1 即可）。命令行 --concurrency
-  # 仅覆盖 rss 桶，web 桶始终串行
+    twikit: 2                  # adapter 内部 page-level sleep 2s，外层不再叠加
+  # 同类型并发度（s2-collector-resilience Step 4 + s10 加 twikit）：
+  #   rss    8 路并发保护 RSSHub 容器 + token 限速
+  #   web    永远串行（爬虫友好，1 即可）
+  #   twikit 必须串行；并发会触发 X 风控（cookie 来源单一 IP）
+  # 命令行 --concurrency 仅覆盖 rss 桶，其他桶按本配置
   concurrency:
     rss: 8
     web: 1
+    twikit: 1
+  # twikit 专属：单源单次 fetch 翻页上限（X 不支持原生 since_id，按 created_at
+  # 倒序翻到窗外即停；max_pages 是防 since 写错穷举翻页的硬上限，~5 页 × 40 条 = 200 条）
+  twikit:
+    max_pages: 5
   http_retry:
     max_attempts: 4
     backoff_base_seconds: 1   # 1, 2, 4, 8

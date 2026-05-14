@@ -31,22 +31,80 @@ from __future__ import annotations
 import asyncio
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 import typer
 from ruamel.yaml.comments import CommentedMap
 
+from ...adapters import supported_types
 from .._helpers import home_option
 from .._json import emit, emit_err, emit_ok, json_option
 from . import _io
-from ._probe import ProbeResult, probe, suggest_id
+from ._probe import _TWIKIT_HOSTS, ProbeResult, probe, suggest_id
 
 # 默认值（形态 B 缺字段时使用）
 _DEFAULT_DOMAIN = ["ai"]
+# ``--type`` 缺省 + probe 也判不出来时的兜底类型；选择 ``rss`` 是因为它对未知 URL
+# 的容错最大（feedparser 即使遇到 HTML 也能 silently 解析出空列表，而 web 模式
+# 会真正下载并尝试抽正文）。新增 source_type 不影响此 fallback 语义。
 _DEFAULT_TYPE_FALLBACK = "rss"
 _BATCH_DEFAULT_TIER = "secondary"
 
 # 形态 A 交互式 tier prompt 提示文本
 _TIER_HINT = "tier (kol / official_first_party / secondary)"
+
+
+def _extract_handle_from_x_url(raw: str) -> str | None:
+    """从 X URL / handle 字符串抽 handle（D-arch-3：twikit url 字段存裸 handle）。
+
+    输入 → 输出示例：
+        ``https://x.com/dotey``            → ``dotey``
+        ``https://x.com/dotey/``           → ``dotey``
+        ``https://x.com/dotey/status/1``   → ``dotey``（取 path 第一段）
+        ``dotey``                          → ``dotey``
+        ``@dotey``                         → ``dotey``
+
+    返回 None 的情况：URL host 不在 ``_TWIKIT_HOSTS`` / path 为空 / 解析失败。
+    调用方可据此回落到"保留原值"行为。
+    """
+    if not raw:
+        return None
+    s = raw.strip()
+    if not s:
+        return None
+    if not s.startswith(("http://", "https://")):
+        # 裸字符串：去前导 @ 与空白
+        return s.lstrip("@").strip() or None
+    try:
+        parsed = urlparse(s)
+    except Exception:  # noqa: BLE001
+        return None
+    if not parsed.netloc:
+        return None
+    host = parsed.netloc.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if host not in _TWIKIT_HOSTS:
+        return None
+    segments = [seg for seg in parsed.path.split("/") if seg]
+    if not segments:
+        return None
+    return segments[0]
+
+
+def _normalize_url_for_storage(url: str, source_type: str) -> str:
+    """根据 source_type 把用户输入的 url 归一化为 sources.yaml 的 url 字段值。
+
+    - ``twikit``：抽 handle（``https://x.com/dotey`` → ``dotey``）；抽不出回落原值
+    - 其他类型：原样返回（保留完整 URL）
+
+    设计依据：D-arch-3 / TwikitAdapter 合约要求 ``source["url"]`` 是 X handle 字符串。
+    """
+    if source_type == "twikit":
+        handle = _extract_handle_from_x_url(url)
+        if handle:
+            return handle
+    return url
 
 
 def _stdin_is_tty() -> bool:
@@ -81,7 +139,7 @@ def _build_item(
 
 def _url_already_present(data: CommentedMap, url: str) -> str | None:
     """扫描所有 source 看 url 是否已存在；返回占用 url 的 id 或 None。"""
-    for kind in _io.SOURCE_KINDS:
+    for kind in supported_types():
         items = data.get(kind) or []
         if not isinstance(items, list):
             continue
@@ -164,14 +222,19 @@ def _interactive_add(
     sid = sid.strip()
 
     type_default = pr.source_type or _DEFAULT_TYPE_FALLBACK
-    stype_raw = typer.prompt("type (rss / web)", default=type_default)
+    stype_raw = typer.prompt(
+        f"type ({' / '.join(supported_types())})", default=type_default
+    )
     stype = (stype_raw or "").strip().lower()
-    if stype not in _io.SOURCE_KINDS:
+    if stype not in supported_types():
         typer.echo(
-            f"[err] type must be one of {_io.SOURCE_KINDS}, got {stype!r}",
+            f"[err] type must be one of {supported_types()}, got {stype!r}",
             err=True,
         )
         raise typer.Exit(code=1)
+
+    # 归一化 url（twikit 把 https://x.com/dotey 抽成 dotey，其他类型保留原值）
+    url_to_store = _normalize_url_for_storage(url, stype)
 
     # 持久化
     try:
@@ -180,8 +243,8 @@ def _interactive_add(
         # 形态 A 也允许从空 yaml 开始（首次录入）
         data = CommentedMap()
 
-    # url 重复检测
-    occupier = _url_already_present(data, url)
+    # url 重复检测（用归一化后的值，避免同一账号通过 URL/handle 双形式录两次）
+    occupier = _url_already_present(data, url_to_store)
     if occupier is not None:
         typer.echo(
             f"[err] url already present under id={occupier}; "
@@ -190,7 +253,7 @@ def _interactive_add(
         )
         raise typer.Exit(code=1)
 
-    item = _build_item(source_id=sid, url=url, tier=tier, domain=domain)
+    item = _build_item(source_id=sid, url=url_to_store, tier=tier, domain=domain)
 
     try:
         _io.upsert_source(data, kind=stype, item=item)
@@ -246,17 +309,20 @@ def _non_interactive_add(
         pr = _run_probe(url)
         stype = pr.source_type or _DEFAULT_TYPE_FALLBACK
     stype = stype.strip().lower()
-    if stype not in _io.SOURCE_KINDS:
+    if stype not in supported_types():
         if json_output:
             emit_err(
-                f"--type must be one of {_io.SOURCE_KINDS}, got {stype!r}",
+                f"--type must be one of {supported_types()}, got {stype!r}",
                 type=stype,
-                allowed=list(_io.SOURCE_KINDS),
+                allowed=list(supported_types()),
             )
             raise typer.Exit(code=2)
         raise typer.BadParameter(
-            f"--type must be one of {_io.SOURCE_KINDS}, got {stype!r}"
+            f"--type must be one of {supported_types()}, got {stype!r}"
         )
+
+    # 归一化 url（twikit handle 抽取；其他类型保留原值）
+    url_to_store = _normalize_url_for_storage(url, stype)
 
     # load yaml；不存在视为空（首次录入）
     try:
@@ -264,13 +330,13 @@ def _non_interactive_add(
     except FileNotFoundError:
         data = CommentedMap()
 
-    # url 重复检测
-    occupier = _url_already_present(data, url)
+    # url 重复检测（基于归一化后的值）
+    occupier = _url_already_present(data, url_to_store)
     if occupier is not None:
         if json_output:
             emit_err(
                 f"url already present under id={occupier}",
-                url=url,
+                url=url_to_store,
                 occupied_by=occupier,
             )
         else:
@@ -281,7 +347,7 @@ def _non_interactive_add(
             )
         raise typer.Exit(code=1)
 
-    item = _build_item(source_id=sid, url=url, tier=tier, domain=domain)
+    item = _build_item(source_id=sid, url=url_to_store, tier=tier, domain=domain)
     try:
         _io.upsert_source(data, kind=stype, item=item)
     except _io.SourceIdConflictError:
@@ -303,7 +369,7 @@ def _non_interactive_add(
             "source added",
             id=sid,
             type=stype,
-            url=url,
+            url=url_to_store,
             tier=tier,
             domain=list(domain),
         )
@@ -371,24 +437,7 @@ def _batch_add(*, from_file: Path, yaml_path: Path, json_output: bool = False) -
         tier = tier_opt or _BATCH_DEFAULT_TIER
         domain = _split_domain(domain_opt)
 
-        # url 重复 → skip
-        occupier = _url_already_present(data, url)
-        if occupier is not None:
-            if json_output:
-                json_items.append(
-                    {
-                        "url": url,
-                        "status": "skipped",
-                        "reason": f"url already present under id={occupier}",
-                        "occupied_by": occupier,
-                    }
-                )
-            else:
-                typer.echo(f"[skip] {url} — url already present under id={occupier}")
-            n_skipped += 1
-            continue
-
-        # probe + 兜底
+        # probe + 兜底（先 probe 拿 source_type，归一化后再做 url 重复检测）
         try:
             pr = _run_probe(url)
         except Exception as e:  # noqa: BLE001 — probe 内部已保证不抛，兜底
@@ -436,15 +485,35 @@ def _batch_add(*, from_file: Path, yaml_path: Path, json_output: bool = False) -
             continue
 
         stype = pr.source_type or _DEFAULT_TYPE_FALLBACK
+        url_to_store = _normalize_url_for_storage(url, stype)
 
-        item = _build_item(source_id=sid, url=url, tier=tier, domain=domain)
+        # url 重复检测（用归一化后的值）→ skip
+        occupier = _url_already_present(data, url_to_store)
+        if occupier is not None:
+            if json_output:
+                json_items.append(
+                    {
+                        "url": url_to_store,
+                        "status": "skipped",
+                        "reason": f"url already present under id={occupier}",
+                        "occupied_by": occupier,
+                    }
+                )
+            else:
+                typer.echo(
+                    f"[skip] {url} — url already present under id={occupier}"
+                )
+            n_skipped += 1
+            continue
+
+        item = _build_item(source_id=sid, url=url_to_store, tier=tier, domain=domain)
         try:
             _io.upsert_source(data, kind=stype, item=item)
         except _io.SourceIdConflictError:
             if json_output:
                 json_items.append(
                     {
-                        "url": url,
+                        "url": url_to_store,
                         "id": sid,
                         "status": "skipped",
                         "reason": "id conflict",
@@ -458,7 +527,7 @@ def _batch_add(*, from_file: Path, yaml_path: Path, json_output: bool = False) -
             if json_output:
                 json_items.append(
                     {
-                        "url": url,
+                        "url": url_to_store,
                         "status": "error",
                         "reason": str(e),
                     }
@@ -471,7 +540,7 @@ def _batch_add(*, from_file: Path, yaml_path: Path, json_output: bool = False) -
         if json_output:
             json_items.append(
                 {
-                    "url": url,
+                    "url": url_to_store,
                     "id": sid,
                     "type": stype,
                     "tier": tier,
@@ -519,7 +588,9 @@ def sources_add_cmd(
         None, "--id", help="信源 id（不给则用 probe 推荐）"
     ),
     source_type: str | None = typer.Option(
-        None, "--type", help="rss / web；不给则用 probe 探测结果"
+        None,
+        "--type",
+        help="信源类型；不给则用 probe 探测结果（合法值随注册的 adapter 动态扩展）",
     ),
     from_file: Path | None = typer.Option(
         None,

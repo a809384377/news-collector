@@ -24,14 +24,16 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Literal
+from typing import Callable
 from urllib.parse import urlparse
 
 import feedparser
 import httpx
 import trafilatura
 
-SourceTypeHint = Literal["rss", "web"]
+# 历史上是 ``Literal["rss", "web"]``；解耦审查后退化为 ``str`` 让新 source_type
+# （twikit / xhs 等）能复用 probe 数据结构。运行时校验改为查 prober 注册表。
+SourceTypeHint = str
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +68,8 @@ _PATH_STOPWORDS = frozenset(
 _TRAILING_EXTS = ("xml", "atom", "rss", "html", "htm")
 # 嗅探 body 头部字节数（content-type 不含 xml 时用）
 _HEAD_SNIFF_BYTES = 512
+# twikit prober 匹配的 host 集合（小写比较；去 www. 前缀后）
+_TWIKIT_HOSTS = frozenset({"x.com", "twitter.com", "mobile.twitter.com"})
 
 
 def suggest_id(url: str) -> str | None:
@@ -119,15 +123,62 @@ def suggest_id(url: str) -> str | None:
     return sid or domain_main or None
 
 
-def _detect_type(content_type: str, body_head: str) -> SourceTypeHint:
-    """按 content-type + body 头部嗅探判 rss / web。"""
+# prober 注册表：``(predicate, source_type)`` 元组按优先级排列。
+# predicate 签名：``(content_type: str, body_head: str, url: str) -> bool``
+# 第一个返回 True 的 prober 赢；都未命中走 ``_DEFAULT_PROBE_TYPE`` fallback。
+# 新增基于响应嗅探或 URL host 判类型的 source_type 时在此追加一行
+# （twikit / xhs 等 host-based 类型适合走 URL 匹配 predicate）。
+def _twikit_predicate(content_type: str, body_head: str, url: str) -> bool:
+    """URL host ∈ ``_TWIKIT_HOSTS`` → ``twikit``。
+
+    优先级排首位：host-based 判定比 content-type sniffing 更确定（X 反爬
+    可能让 ``x.com/<handle>`` 返回 HTML 反爬页，content-type 嗅探会误判为 web；
+    host 匹配先于嗅探让结果稳定）。
+    """
+    if not url:
+        return False
+    try:
+        host = urlparse(url).hostname or ""
+    except Exception:
+        return False
+    host = host.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host in _TWIKIT_HOSTS
+
+
+def _rss_predicate(content_type: str, body_head: str, url: str) -> bool:
     ct = (content_type or "").lower()
     if "xml" in ct or "rss" in ct or "atom" in ct:
-        return "rss"
+        return True
     head = body_head[:_HEAD_SNIFF_BYTES].lstrip().lower()
-    if head.startswith(("<rss", "<feed", "<?xml")):
-        return "rss"
-    return "web"
+    return head.startswith(("<rss", "<feed", "<?xml"))
+
+
+_PROBERS: list[tuple[Callable[[str, str, str], bool], SourceTypeHint]] = [
+    (_twikit_predicate, "twikit"),  # host-based 确定性最强，排首位
+    (_rss_predicate, "rss"),
+]
+_DEFAULT_PROBE_TYPE: SourceTypeHint = "web"
+
+
+def _detect_type(
+    content_type: str, body_head: str, url: str = ""
+) -> SourceTypeHint:
+    """遍历 ``_PROBERS`` 注册表判 source_type；都不命中走默认 fallback。
+
+    Args:
+        content_type: HTTP 响应 Content-Type
+        body_head: 响应正文前 ``_HEAD_SNIFF_BYTES`` 字节
+        url: 原始 URL（host-based prober 用，如 twikit）
+    """
+    for predicate, src_type in _PROBERS:
+        try:
+            if predicate(content_type, body_head, url):
+                return src_type
+        except Exception:
+            continue
+    return _DEFAULT_PROBE_TYPE
 
 
 def _extract_title_rss(body: str) -> str | None:
@@ -205,7 +256,7 @@ async def probe(
 
         ct = resp.headers.get("content-type", "")
         body = resp.text
-        stype = _detect_type(ct, body[:_HEAD_SNIFF_BYTES])
+        stype = _detect_type(ct, body[:_HEAD_SNIFF_BYTES], url)
         sample_title = (
             _extract_title_rss(body) if stype == "rss" else _extract_title_web(body)
         )

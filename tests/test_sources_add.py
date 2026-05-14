@@ -724,3 +724,243 @@ def test_add_json_mutually_exclusive(
     payload = _json.loads(r.stdout)
     assert payload["ok"] is False
     assert "mutually exclusive" in payload["message"]
+
+
+# =================================================================
+# twikit 归一化与录入（s10 新增）
+# =================================================================
+
+
+class TestNormalizeUrlForStorage:
+    """``_extract_handle_from_x_url`` + ``_normalize_url_for_storage`` 单元测试。"""
+
+    @pytest.mark.parametrize(
+        "raw, expected",
+        [
+            ("https://x.com/dotey", "dotey"),
+            ("https://x.com/dotey/", "dotey"),
+            ("https://x.com/dotey/status/1234567", "dotey"),
+            ("https://twitter.com/karpathy", "karpathy"),
+            ("https://mobile.twitter.com/sama", "sama"),
+            ("https://www.x.com/elonmusk", "elonmusk"),
+            ("dotey", "dotey"),
+            ("@dotey", "dotey"),
+            ("  dotey  ", "dotey"),
+        ],
+    )
+    def test_extract_handle_variants(self, raw: str, expected: str) -> None:
+        assert add_cmd._extract_handle_from_x_url(raw) == expected
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "",
+            "   ",
+            "https://example.com/dotey",
+            "https://nitter.net/dotey",
+            "https://x.com/",  # path 为空
+        ],
+    )
+    def test_extract_handle_returns_none(self, raw: str) -> None:
+        assert add_cmd._extract_handle_from_x_url(raw) is None
+
+    def test_normalize_url_twikit_extracts_handle(self) -> None:
+        assert (
+            add_cmd._normalize_url_for_storage("https://x.com/dotey", "twikit")
+            == "dotey"
+        )
+
+    def test_normalize_url_non_twikit_keeps_original(self) -> None:
+        assert (
+            add_cmd._normalize_url_for_storage("https://example.com/feed", "rss")
+            == "https://example.com/feed"
+        )
+        assert (
+            add_cmd._normalize_url_for_storage(
+                "https://anthropic.com/news", "web"
+            )
+            == "https://anthropic.com/news"
+        )
+
+    def test_normalize_url_twikit_handle_failure_keeps_original(self) -> None:
+        """twikit type 但 URL 抽不出 handle（host 不在白名单） → 保留原值。"""
+        assert (
+            add_cmd._normalize_url_for_storage("https://example.com/dotey", "twikit")
+            == "https://example.com/dotey"
+        )
+
+
+def test_form_b_twikit_url_stored_as_handle(
+    runner: CliRunner, empty_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``add https://x.com/dotey --tier=kol --type=twikit`` → yaml url=dotey。"""
+
+    def should_not_run_probe(url):
+        raise AssertionError("probe should not run when --type is given")
+
+    monkeypatch.setattr(add_cmd, "_run_probe", should_not_run_probe)
+
+    app = make_app()
+    r = runner.invoke(
+        app,
+        [
+            "add", "https://x.com/dotey",
+            "--tier", "kol",
+            "--id", "x_dotey",
+            "--type", "twikit",
+            "--home", str(empty_home),
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    assert "[ok] added x_dotey (twikit)" in r.stdout
+
+    data = _read_yaml(empty_home)
+    found = _io.find_source(data, "x_dotey")
+    assert found is not None
+    kind, _, item = found
+    assert kind == "twikit"
+    assert item["url"] == "dotey"  # 关键：存的是 handle，不是完整 URL
+
+
+def test_form_b_twikit_type_auto_via_probe(
+    runner: CliRunner, empty_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """不传 --type；probe 给出 source_type=twikit + suggested_id=x_dotey → yaml url=dotey。"""
+    pr = _make_probe_result(
+        url="https://x.com/dotey",
+        source_type="twikit",
+        suggested_id="x_dotey",
+        sample_title=None,
+    )
+    _patch_probe(monkeypatch, pr)
+
+    app = make_app()
+    r = runner.invoke(
+        app,
+        [
+            "add", "https://x.com/dotey",
+            "--tier", "kol",
+            "--home", str(empty_home),
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    assert "[ok] added x_dotey (twikit)" in r.stdout
+
+    data = _read_yaml(empty_home)
+    found = _io.find_source(data, "x_dotey")
+    assert found is not None
+    kind, _, item = found
+    assert kind == "twikit"
+    assert item["url"] == "dotey"
+
+
+def test_form_b_twikit_duplicate_after_normalization(
+    runner: CliRunner, empty_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """首次 add 走 URL 形式落盘 handle，再以同一 URL add 应识别为重复（基于归一化值）。"""
+
+    def should_not_run_probe(url):
+        raise AssertionError("probe should not run when --type is given")
+
+    monkeypatch.setattr(add_cmd, "_run_probe", should_not_run_probe)
+
+    app = make_app()
+    args = [
+        "add", "https://x.com/dotey",
+        "--tier", "kol",
+        "--id", "x_dotey",
+        "--type", "twikit",
+        "--home", str(empty_home),
+    ]
+    r1 = runner.invoke(app, args)
+    assert r1.exit_code == 0, r1.output
+
+    # 二次添加（无 --id，由 suggest_id 自动给）→ 应被 url 重复检测拦下
+    r2 = runner.invoke(
+        app,
+        [
+            "add", "https://x.com/dotey",
+            "--tier", "kol",
+            "--type", "twikit",
+            "--home", str(empty_home),
+        ],
+    )
+    assert r2.exit_code == 1
+    assert "url already present" in (r2.stderr + r2.output)
+
+
+def test_form_c_batch_twikit_normalizes_handle(
+    runner: CliRunner, empty_home: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """批量录入：``https://x.com/dotey`` 一行 → yaml 落 ``url=dotey``。"""
+
+    pr = _make_probe_result(
+        url="https://x.com/dotey",
+        source_type="twikit",
+        suggested_id="x_dotey",
+        sample_title=None,
+    )
+
+    def probe_returns_twikit(url):
+        return pr if "x.com" in url else _make_probe_result(url=url)
+
+    monkeypatch.setattr(add_cmd, "_run_probe", probe_returns_twikit)
+
+    batch_file = tmp_path / "urls.txt"
+    batch_file.write_text("https://x.com/dotey kol ai x_dotey\n", encoding="utf-8")
+
+    app = make_app()
+    r = runner.invoke(
+        app,
+        [
+            "add",
+            "--from-file", str(batch_file),
+            "--home", str(empty_home),
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    assert "[ok]   x_dotey (twikit) — added" in r.stdout
+
+    data = _read_yaml(empty_home)
+    found = _io.find_source(data, "x_dotey")
+    assert found is not None
+    kind, _, item = found
+    assert kind == "twikit"
+    assert item["url"] == "dotey"
+
+
+def test_form_a_interactive_twikit_url_stored_as_handle(
+    runner: CliRunner, empty_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """形态 A 交互式录入 twikit 信源：prompt 输入 type=twikit → yaml url=dotey。"""
+
+    pr = _make_probe_result(
+        url="https://x.com/dotey",
+        source_type="twikit",
+        suggested_id="x_dotey",
+        sample_title=None,
+    )
+    _patch_probe(monkeypatch, pr)
+    monkeypatch.setattr(add_cmd, "_stdin_is_tty", lambda: True)
+
+    # tier → domain → id → type 顺序
+    answers = iter(["kol", "ai", "x_dotey", "twikit"])
+    monkeypatch.setattr(
+        "typer.prompt",
+        lambda *a, **kw: next(answers),
+    )
+
+    app = make_app()
+    r = runner.invoke(
+        app,
+        ["add", "https://x.com/dotey", "--home", str(empty_home)],
+    )
+    assert r.exit_code == 0, r.output
+    assert "[ok] added x_dotey (twikit)" in r.stdout
+
+    data = _read_yaml(empty_home)
+    found = _io.find_source(data, "x_dotey")
+    assert found is not None
+    kind, _, item = found
+    assert kind == "twikit"
+    assert item["url"] == "dotey"

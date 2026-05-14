@@ -323,11 +323,24 @@ def test_setup_json_happy_path(
     assert payload["details"]["home"] == str(home)
     steps = payload["details"]["steps"]
     names = [s["name"] for s in steps]
-    assert names == ["dirs", "sources_yaml", "compose_yml", "env", "token", "containers", "db"]
+    assert names == [
+        "dirs",
+        "sources_yaml",
+        "compose_yml",
+        "env",
+        "twikit_cookies_example",
+        "token",
+        "containers",
+        "db",
+    ]
     # token 在 --json 隐含 --yes 模式应标 skip + token_skipped=True
     token_step = next(s for s in steps if s["name"] == "token")
     assert token_step["action"] == "skip"
     assert token_step["token_skipped"] is True
+    # twikit cookies example 首次跑应 [do]，real 文件未生成
+    cookies_step = next(s for s in steps if s["name"] == "twikit_cookies_example")
+    assert cookies_step["action"] == "do"
+    assert cookies_step["real_present"] is False
 
 
 def test_setup_json_docker_failure(
@@ -347,6 +360,92 @@ def test_setup_json_docker_failure(
     assert payload["ok"] is False
     assert "docker step failed" in payload["message"]
     assert payload["details"]["home"] == str(home)
+
+
+def test_setup_creates_twikit_cookies_example(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """clean home 首跑：生成 ``twikit_cookies.example.json`` 含 auth_token / ct0 占位
+    + ``[do]`` 输出 + 提示用户复制为 real 文件。"""
+    home = tmp_path / "home"
+    _mock_docker_needs_up(monkeypatch)
+    _force_tty(monkeypatch)
+    monkeypatch.setattr(typer, "prompt", lambda *a, **kw: "")  # 跳过 X token 引导
+
+    runner = CliRunner()
+    result = runner.invoke(_build_app(), ["setup", "--home", str(home)])
+
+    assert result.exit_code == 0, result.output
+    assert "[do]   twikit cookies example" in result.output
+    assert "twikit_cookies.example.json" in result.output
+    # 提示用户填实际文件
+    assert "twikit_cookies.json" in result.output
+
+    example_path = home / "twikit_cookies.example.json"
+    assert example_path.exists()
+    payload = json.loads(example_path.read_text(encoding="utf-8"))
+    assert payload["auth_token"] == "<paste here>"
+    assert payload["ct0"] == "<paste here>"
+    assert "_comment" in payload  # 指引留在文件里
+    # 不强制生成 real 文件
+    assert not (home / "twikit_cookies.json").exists()
+
+
+def test_setup_twikit_cookies_example_idempotent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """二次跑：``twikit_cookies.example.json`` 不被覆盖，输出 ``[skip]``。"""
+    home = tmp_path / "home"
+    _mock_docker_all_up(monkeypatch)
+    _force_tty(monkeypatch)
+    monkeypatch.setattr(typer, "prompt", lambda *a, **kw: "tk-1")
+
+    runner = CliRunner()
+    runner.invoke(_build_app(), ["setup", "--home", str(home)])
+
+    example_path = home / "twikit_cookies.example.json"
+    mtime_before = example_path.stat().st_mtime_ns
+    content_before = example_path.read_text(encoding="utf-8")
+
+    # 用户手动修改 example（模拟实际场景：用户拷贝并改名，但 example 仍存在）
+    # 同步生成 real 文件，看 setup 是否仍 [skip]
+    (home / "twikit_cookies.json").write_text(
+        json.dumps({"auth_token": "real-tk", "ct0": "real-ct0"}),
+        encoding="utf-8",
+    )
+
+    result2 = runner.invoke(_build_app(), ["setup", "--home", str(home)])
+
+    assert result2.exit_code == 0, result2.output
+    assert "[skip] twikit_cookies.example.json already exists" in result2.output
+    assert example_path.stat().st_mtime_ns == mtime_before
+    assert example_path.read_text(encoding="utf-8") == content_before
+
+
+def test_setup_twikit_cookies_real_present_flagged_in_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--json 模式：当 twikit_cookies.json real 文件存在 → step.real_present=True。"""
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "twikit_cookies.json").write_text(
+        json.dumps({"auth_token": "real-tk", "ct0": "real-ct0"}),
+        encoding="utf-8",
+    )
+    _mock_docker_needs_up(monkeypatch)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        _build_app(), ["setup", "--home", str(home), "--json"]
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    cookies_step = next(
+        s for s in payload["details"]["steps"]
+        if s["name"] == "twikit_cookies_example"
+    )
+    assert cookies_step["real_present"] is True
 
 
 def test_compose_yml_idempotent_on_rerun(

@@ -1,0 +1,41 @@
+[
+  {
+    "id": "2053987620732944869",
+    "text": "Just shipped a refactor in newsbox: ADAPTER_REGISTRY is now the single source of truth.",
+    "created_at": "Mon May 11 09:23:34 +0000 2026",
+    "lang": "en",
+    "_data": {
+      "note_tweet": null,
+      "article": null
+    }
+  },
+  {
+    "id": "2053987620732944870",
+    "text": "Short preview text of a longer note...",
+    "created_at": "Mon May 11 10:00:00 +0000 2026",
+    "lang": "en",
+    "_data": {
+      "note_tweet": {
+        "is_expandable": true,
+        "note_tweet_results": {
+          "result": {
+            "id": "note-1",
+            "text": "This is the FULL expanded body of a note_tweet (X Premium long post). It vastly exceeds 280 chars and represents the canonical long-form text that twikit exposes via tweet._data['note_tweet']['note_tweet_results']['result']['text']. newsbox TwikitAdapter is expected to prefer this full text over tweet.text for the body field, while is_long_form should be 'note_tweet'."
+          }
+        }
+      },
+      "article": null
+    }
+  },
+  {
+    "id": "2053987620732944871",
+    "text": "Quoting a great take on RSS reliability.",
+    "created_at": "Mon May 11 11:11:11 +0000 2026",
+    "lang": "en",
+    "_data": {
+      "note_tweet": null,
+      "article": null,
+      "quoted_status_id_str": "1900000000000000000"
+    }
+  }
+]

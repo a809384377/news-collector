@@ -32,10 +32,21 @@ class HttpRetryConfig(BaseModel):
     backoff_base_seconds: int
 
 
+class TwikitFetchConfig(BaseModel):
+    """twikit adapter 专属配置（s10 新增）。
+
+    twikit 不支持原生 since_id；adapter 内按 created_at 倒序翻页直到时间窗外，
+    ``max_pages`` 是防止 since 写错时穷举翻页的硬上限（~5 页 × 40 条 = 200 条）。
+    """
+
+    max_pages: int = 5
+
+
 class FetchConfig(BaseModel):
     default_since: str
     per_source_rate_limit_seconds: dict[str, int]
     concurrency: dict[str, int] = Field(default_factory=lambda: {"rss": 8, "web": 1})
+    twikit: TwikitFetchConfig = Field(default_factory=TwikitFetchConfig)
     http_retry: HttpRetryConfig
     consecutive_failure_skip: int
 
