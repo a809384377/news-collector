@@ -268,7 +268,7 @@ newsbox setup             # 自动补齐 compose 文件 + 启容器（幂等）
 4. 抓到内容但入库 0 条 → 多半是去重命中（同一信源相同 external_id 不重复入）
 5. 扩大窗口仍异常 → 看 `newsbox logs --tail=100` 与 adapter 真实样本，再下 bug 结论（不要凭"页面看着有内容"就判 adapter 错）
 
-**X / Twitter 信源失败** —— v1.1.0 起 X 走 twikit（cookie-based），不再依赖 `.env` 的 `TWITTER_AUTH_TOKEN`。`newsbox doctor` 看 `[Twikit]` panel：
+**X / Twitter 信源失败** —— v1.0.2 起 X 走 twikit（cookie-based），不再依赖 `.env` 的 `TWITTER_AUTH_TOKEN`。`newsbox doctor` 看 `[Twikit]` panel：
 - `twikit cookies 文件不存在` → 按 [docs/twikit-setup.md](../../docs/twikit-setup.md) §1 生成 `~/.newsbox/twikit_cookies.json`
 - `缺少 auth_token / ct0 字段` → 重新从浏览器 devtools 复制填入
 - fetch 时报 `TwikitAuthError`（401） → auth_token 失效，重新复制（一般数月才失效一次）
@@ -306,7 +306,7 @@ newsbox config show         # 看当前生效配置
 - `sources.yaml` — 信源清单（顶层 `rss` / `web` / `twikit` 三类）
 - `config.yaml` — CLI / 抓取参数配置（含 `thresholds.cli_read_warn` 覆盖 read 阈值默认 10000）
 - `.env` — `TWITTER_AUTH_TOKEN`（容器内 RSSHub 兜底；X 主路径已走 twikit）
-- `twikit_cookies.json` — X 浏览器 cookies（v1.1.0+，auth_token + ct0；setup 生成同名 `.example.json` 模板）
+- `twikit_cookies.json` — X 浏览器 cookies（v1.0.2+，auth_token + ct0；setup 生成同名 `.example.json` 模板）
 - `raw.db` — SQLite 采集库
 - `docker-compose.yml` — RSSHub + Redis 容器配置（v0.5.1 起）
 - `logs/newsbox.log` — 日志

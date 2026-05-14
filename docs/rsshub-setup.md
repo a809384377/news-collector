@@ -1,6 +1,6 @@
 # RSSHub 接入指南
 
-> ⚠️ **X (Twitter) 信源已从 RSSHub 迁出到 twikit**（v1.1.0 起，s10-x-twikit-migration sprint）。本文 §3 X auth_token 提取步骤**仍可保留作为 newsbox 容器内 RSSHub 其他可能用到 X 的路由**（极少用），但 newsbox 自家的 26 个 X KOL / 官方账号信源已全部走 twikit。X 信源配置见 [twikit-setup.md](./twikit-setup.md)。
+> ⚠️ **X (Twitter) 信源已从 RSSHub 迁出到 twikit**（v1.0.2 起，s10-x-twikit-migration + s11-twikit-cookieconflict-hotfix sprint）。本文 §3 X auth_token 提取步骤**仍可保留作为 newsbox 容器内 RSSHub 其他可能用到 X 的路由**（极少用），但 newsbox 自家的 26 个 X KOL / 官方账号信源已全部走 twikit。X 信源配置见 [twikit-setup.md](./twikit-setup.md)。
 
 newsbox 的 Reddit / Anthropic news / OpenAI status / 其他 RSSHub 路由仍通过 RSSHub 容器处理。本文档说明如何在本机部署 RSSHub + Redis 容器并配置 X 的 auth_token（容器层面，非 twikit）。
 

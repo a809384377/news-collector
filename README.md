@@ -155,7 +155,7 @@ newsbox setup               # 重建
 | [skills/newsbox/SKILL.md](./skills/newsbox/SKILL.md) | Claude Code skill 说明书（agent 接入必读） |
 | [docs/sdk-usage.md](./docs/sdk-usage.md) | SDK 使用指南（下游应用必读） |
 | [docs/install-guide.md](./docs/install-guide.md) | 安装路径详解 + 国内镜像配置 |
-| [docs/twikit-setup.md](./docs/twikit-setup.md) | **X (Twitter) cookies 配置 + ct0 rotation 原理 + twikit 升级流程**（v1.1.0+ X 信源主入口） |
+| [docs/twikit-setup.md](./docs/twikit-setup.md) | **X (Twitter) cookies 配置 + ct0 rotation 原理 + twikit 升级流程**（v1.0.2+ X 信源主入口） |
 | [docs/rsshub-setup.md](./docs/rsshub-setup.md) | RSSHub 容器接入（Reddit / Anthropic / OpenAI status 等仍走 RSSHub） |
 | [docs/product-alignment.md](./docs/product-alignment.md) | 三层角色边界 + 完整 CLI 命令矩阵 + SDK 契约 |
 | [docs/sources.seed.yaml](./docs/sources.seed.yaml) | 一期 52 信源种子清单 |
