@@ -35,6 +35,10 @@ def test_load_config_pure_default(tmp_path: Path) -> None:
     }
     assert config.fetch.concurrency == {"rss": 8, "web": 1, "twikit": 1}
     assert config.fetch.twikit.max_pages == 5
+    # s13 reddit_enrich 默认值
+    assert config.fetch.reddit_enrich.enabled is True
+    assert config.fetch.reddit_enrich.rate_limit_seconds == 6.0
+    assert config.fetch.reddit_enrich.top_comments == 5
     assert config.fetch.http_retry.max_attempts == 4
     assert config.fetch.http_retry.backoff_base_seconds == 1
     assert config.fetch.consecutive_failure_skip == 3
@@ -82,6 +86,26 @@ def test_load_config_user_override_nested_dict(tmp_path: Path) -> None:
         "twikit": 2,  # 默认保留
     }
     # 兄弟字段未动
+    assert config.fetch.default_since == "24h"
+
+
+def test_load_config_user_override_reddit_enrich(tmp_path: Path) -> None:
+    """用户可关闭 reddit 富化或调速率 / 评论数，其他字段保留默认。"""
+    user_yaml = tmp_path / "config.yaml"
+    user_yaml.write_text(
+        "fetch:\n"
+        "  reddit_enrich:\n"
+        "    enabled: false\n"
+        "    rate_limit_seconds: 1.5\n",
+        encoding="utf-8",
+    )
+
+    config = load_config(home=tmp_path)
+    assert config.fetch.reddit_enrich.enabled is False
+    assert config.fetch.reddit_enrich.rate_limit_seconds == 1.5
+    # 未指定字段保留默认
+    assert config.fetch.reddit_enrich.top_comments == 5
+    # 兄弟段未动
     assert config.fetch.default_since == "24h"
 
 

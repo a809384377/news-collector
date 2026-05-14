@@ -28,6 +28,7 @@ from loguru import logger
 
 from .. import db as db_module
 from ..adapters import ADAPTER_REGISTRY
+from ..adapters.rss_adapter import RSSAdapter
 from ..config import AppConfig, load_config
 from ..models import RawArticle
 from ..sources import iter_sources
@@ -171,9 +172,47 @@ def _insert_article(
     )
     conn.commit()
     if cur.rowcount > 0:
+        # s13: 若 adapter 挂了 reddit 富化产出，把评论写入 reddit_comments
+        if article.enrichment is not None and cur.lastrowid is not None:
+            _insert_reddit_comments(conn, cur.lastrowid, article.enrichment.top_comments)
         return "inserted"
     # 走到这里说明同 batch 内重复 external_id（adapter 输出不洁），按 dup_external 计
     return "dup_external"
+
+
+def _insert_reddit_comments(
+    conn: sqlite3.Connection,
+    article_id: int,
+    comments,  # tuple[RedditComment, ...]
+) -> None:
+    """把 reddit 评论写入 reddit_comments（s13）。
+
+    使用 ``INSERT OR IGNORE`` 配合 UNIQUE(article_id, comment_id) 实现幂等：
+    重复 enrich 同一帖子时评论表不会出现重复行（dup_external 分支不会走到此处，
+    但即便走到也安全）。
+    """
+    if not comments:
+        return
+    for c in comments:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO reddit_comments (
+                article_id, comment_id, parent_id,
+                author, score, body, created_utc, rank
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                article_id,
+                c.comment_id,
+                c.parent_id,
+                c.author,
+                c.score,
+                c.body,
+                c.created_utc.isoformat() if c.created_utc else None,
+                c.rank,
+            ),
+        )
+    conn.commit()
 
 
 # ---- 单源抓取 ---------------------------------------------------------------
@@ -191,6 +230,27 @@ def _select_sources(sources: list[dict], source_filter: str) -> list[dict]:
 
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _build_adapter(
+    source_type: str,
+    adapter_registry: dict[str, Any],
+    config: AppConfig,
+):
+    """实例化 adapter；对 RSSAdapter 注入 reddit_enrich 配置参数（s13）。
+
+    其他 adapter 类（包括测试用 StubAdapter / mock factory）走无参实例化路径，
+    保持 s10 ADAPTER_REGISTRY = dict[str, cls] 单一真相源不动。
+    """
+    cls = adapter_registry[source_type]
+    if source_type == "rss" and cls is RSSAdapter:
+        cfg = config.fetch.reddit_enrich
+        return cls(
+            reddit_enrich_enabled=cfg.enabled,
+            reddit_enrich_rate_seconds=cfg.rate_limit_seconds,
+            reddit_top_comments=cfg.top_comments,
+        )
+    return cls()
 
 
 async def _fetch_one_source(
@@ -238,7 +298,7 @@ async def _fetch_one_source(
         res.error = f"unknown adapter: {source_type}"
         return res
 
-    adapter = adapter_registry[source_type]()
+    adapter = _build_adapter(source_type, adapter_registry, config)
     fetched_at = _now_utc()
 
     try:

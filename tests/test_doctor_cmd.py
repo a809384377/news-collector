@@ -100,7 +100,7 @@ def test_doctor_all_green(
     assert "[OK]   .env exists" in out
     assert "[OK]   TWITTER_AUTH_TOKEN set" in out
     assert "[OK]   sources.yaml exists" in out
-    assert "raw.db migrations applied 2/2" in out
+    assert "raw.db migrations applied 3/3" in out  # s13 起含 0003_reddit_comments
     assert "[OK]   sample rss:fake_rss fetched 3 articles" in out
     assert "[OK]   sample web:fake_web fetched 3 articles" in out
     assert "doctor: OK" in out

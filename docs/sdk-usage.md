@@ -133,6 +133,68 @@ def read_raw(
 
 ---
 
+## Reddit 评论查询：`get_reddit_comments`
+
+v1.0.3 起 reddit 信源富化机制上线（详见 `docs/product-alignment.md`「方案 A 落地形态」段）：rss adapter 在抓回 reddit feed 后追加一次 `.json` 请求，把 selftext / score / flair / num_comments 拼回 `articles_raw.body` 的 markdown 引用块（顶部 `> **r/<sub>** · score=...`），把 top 5 评论（默认）单独写入 `reddit_comments` 表（fk → `articles_raw.id`，按 score 倒序 1-indexed rank）。
+
+```python
+from newsbox.sdk import read_raw, get_reddit_comments
+from datetime import datetime, timedelta, timezone
+
+since = datetime.now(timezone.utc) - timedelta(hours=24)
+for art in read_raw(domain="ai", since=since, source_types=["rss"]):
+    if not art.url.startswith("https://www.reddit.com/"):
+        continue
+    comments = get_reddit_comments(art.id)
+    print(f"{art.title} ({len(comments)} top comments)")
+    for c in comments:
+        print(f"  #{c.rank} {c.author} (+{c.score}): {c.body[:80]}")
+```
+
+### 数据类：`RedditCommentRow`
+
+`@dataclass(frozen=True, slots=True)`，8 个字段：
+
+| 字段 | 类型 | 含义 |
+|------|------|------|
+| `article_id` | `int` | 关联的 `articles_raw.id` |
+| `comment_id` | `str` | reddit `t1_xxx` |
+| `parent_id` | `str \| None` | 父评论 id；顶层评论时 = 帖子 `t3_xxx`；偶有缺失 |
+| `author` | `str` | 已过滤 AutoModerator / `[deleted]` |
+| `score` | `int` | 评论 score（可负） |
+| `body` | `str` | 已过滤 `[deleted]` / `[removed]` |
+| `created_utc` | `datetime \| None` | reddit 偶有未返回 |
+| `rank` | `int` | 过滤后按 score 倒序的位置（1-indexed） |
+
+### API：`get_reddit_comments`
+
+```python
+def get_reddit_comments(
+    article_id: int,
+    db_path: Path | None = None,
+) -> list[RedditCommentRow]:
+```
+
+| 参数 | 说明 |
+|------|------|
+| `article_id` | `articles_raw.id`；非 reddit 文章会返回空 list（外键侧无对应行）。 |
+| `db_path` | 覆盖默认 `~/.newsbox/raw.db`；测试或多 db 场景使用。 |
+
+返回：`RedditCommentRow` 列表，按 `rank ASC` 排序（rank=1 在前）。无评论时返回空 list。
+
+异常：`FileNotFoundError` —— `db_path` 指向的文件不存在。
+
+**设计取舍**：返回 list 而非 generator——单篇帖子评论数量极小（默认 top 5），一次性 fetchall 比游标迭代更清晰，调用方可直接 `[0].body` 取头条。
+
+**评论过滤**（入库前已完成，消费方拿到的就是干净集合）：
+- 仅顶层评论 `kind == 't1'`（不含 "more comments" 占位 / 嵌套回复）
+- author 排除 `AutoModerator` / `[deleted]`
+- body 排除 `[deleted]` / `[removed]`
+
+**帖子级元信息**（score / upvote_ratio / num_comments / flair）已拼进 `art.body` 顶部 markdown 引用块，**不在评论表里**——下游 LLM prompt 直接喂 body 就拿到信号；需要程序化提取的场景按 markdown 解析或后续 sprint 加结构化列。
+
+---
+
 ## 不暴露的字段
 
 SDK 故意**不**暴露这些采集层内部字段：

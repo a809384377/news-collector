@@ -7,6 +7,7 @@
 4. since 切分混合时间条目
 5. 无 pubDate 的 entry → published_at=None 且不丢失
 6. User-Agent 头部传递验证
+7. s13 reddit 富化：URL host 检测 / body 改写 / 失败兜底 / disabled 时零侵入
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ import httpx
 from newsbox.adapters.rss_adapter import RSSAdapter
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "rss"
+REDDIT_FIXTURE_DIR = Path(__file__).parent / "fixtures" / "reddit"
 
 
 # ---- helpers ---------------------------------------------------------------
@@ -154,6 +156,118 @@ def test_entry_without_published_is_kept_with_none() -> None:
     assert articles[0].published_at is None
     assert articles[0].external_id == "https://example.com/post-1"
     assert articles[0].title == "Entry without pubDate"
+
+
+# ---- s13 reddit 富化集成 ---------------------------------------------------
+
+
+_REDDIT_RSS_TEMPLATE = b"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>r/LocalLLaMA</title>
+    <link>https://www.reddit.com/r/LocalLLaMA/</link>
+    <description>desc</description>
+    <item>
+      <title>new MoE from ai2, EMO</title>
+      <link>https://www.reddit.com/r/LocalLLaMA/comments/1t7kgy4/new_moe_from_ai2_emo/</link>
+      <guid>t3_1t7kgy4</guid>
+      <description>&lt;table&gt;&lt;tr&gt;&lt;td&gt;link post template&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;</description>
+      <pubDate>Sat, 10 May 2026 12:00:00 +0000</pubDate>
+    </item>
+  </channel>
+</rss>
+"""
+
+
+def _mock_transport_client(feed_bytes: bytes, json_bytes: bytes | None, *, json_status: int = 200) -> httpx.AsyncClient:
+    """同一 client 根据 path 路由：含 .json 走富化 fixture；否则走 feed bytes。"""
+    def handler(request: httpx.Request) -> httpx.Response:
+        if ".json" in request.url.path:
+            return httpx.Response(
+                json_status,
+                content=json_bytes or b'{"error":"x"}',
+                headers={"content-type": "application/json"},
+            )
+        return httpx.Response(200, content=feed_bytes)
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+
+def test_reddit_url_enrich_success_rewrites_body() -> None:
+    """reddit URL 富化成功：body 重写为元信息块+selftext，enrichment 挂载。"""
+    json_bytes = (REDDIT_FIXTURE_DIR / "r_localllama_post_with_comments.json").read_bytes()
+
+    async def _go() -> list:
+        client = _mock_transport_client(_REDDIT_RSS_TEMPLATE, json_bytes)
+        try:
+            adapter = RSSAdapter(
+                http_client=client,
+                reddit_enrich_rate_seconds=0.0,  # 测试加速
+            )
+            return await adapter.fetch({"id": "r_localllama", "url": "https://example.com/feed"}, since=None)
+        finally:
+            await client.aclose()
+
+    articles = _run(_go())
+    assert len(articles) == 1
+    art = articles[0]
+
+    # body 重写：元信息引用块出现，原 RSS table 模板不再
+    assert "**r/LocalLLaMA**" in art.body
+    assert "score=" in art.body
+    assert "comments" in art.body
+    assert "flair: New Model" in art.body
+    assert "<table>" not in art.body, f"原 RSS 模板应被丢弃，got body: {art.body[:200]}"
+
+    # enrichment 挂载
+    assert art.enrichment is not None
+    assert art.enrichment.name.startswith("t3_")
+    assert art.enrichment.subreddit == "LocalLLaMA"
+    assert len(art.enrichment.top_comments) >= 1
+
+
+def test_reddit_url_enrich_failure_falls_back_to_original_body() -> None:
+    """富化 5xx 时回落原 RSS body，enrichment=None，不阻塞主流程。"""
+    async def _go() -> list:
+        client = _mock_transport_client(_REDDIT_RSS_TEMPLATE, b"err", json_status=503)
+        try:
+            adapter = RSSAdapter(
+                http_client=client,
+                reddit_enrich_rate_seconds=0.0,
+            )
+            return await adapter.fetch({"id": "r_localllama", "url": "https://example.com/feed"}, since=None)
+        finally:
+            await client.aclose()
+
+    articles = _run(_go())
+    assert len(articles) == 1
+    art = articles[0]
+    assert art.enrichment is None
+    assert "<table>" in art.body, "富化失败应保留原 RSS body"
+
+
+def test_reddit_url_with_enrich_disabled_zero_invasion() -> None:
+    """reddit_enrich_enabled=False 时 reddit URL 也不调富化（兼容场景）。"""
+    client = _stub_client(_REDDIT_RSS_TEMPLATE)
+    adapter = RSSAdapter(http_client=client, reddit_enrich_enabled=False)
+
+    articles = _run(adapter.fetch({"id": "r_localllama", "url": "https://example.com/feed"}, since=None))
+    assert len(articles) == 1
+    assert articles[0].enrichment is None
+    assert "<table>" in articles[0].body
+    # client.get 应只调一次（拉 feed，无富化请求）
+    assert client.get.await_count == 1
+
+
+def test_non_reddit_url_does_not_trigger_enrich() -> None:
+    """非 reddit URL 即便 enrich_enabled=True 也不触发富化，client.get 只调一次。"""
+    client = _stub_client(_read_fixture("anthropic_blog.xml"))
+    adapter = RSSAdapter(http_client=client)  # 默认 enabled=True
+
+    _run(adapter.fetch({"id": "anthropic_blog", "url": "https://www.anthropic.com/rss.xml"}, since=None))
+    # anthropic_blog fixture 没有 reddit.com URL → 不应该有富化 GET
+    assert client.get.await_count == 1, (
+        f"非 reddit URL 应只拉 feed 一次，got {client.get.await_count} calls"
+    )
 
 
 def test_user_agent_is_set() -> None:

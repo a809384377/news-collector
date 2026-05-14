@@ -17,6 +17,14 @@ fetch:
   # 倒序翻到窗外即停；max_pages 是防 since 写错穷举翻页的硬上限，~5 页 × 40 条 = 200 条）
   twikit:
     max_pages: 5
+  # reddit 富化（s13）：rss adapter 抓回 feed 后对每条 reddit 帖子追加一次 `.json` 请求拿评论 + score / flair
+  # rate_limit_seconds: 富化每帖间隔（reddit 无 OAuth 限 10 QPM；6s 保守留 buffer）
+  # top_comments:       每帖入库的顶层评论数（按 score desc + 过滤 bot/[deleted]）
+  # enabled=false 退回原生 RSS 路径（body 不重写、评论不入库）
+  reddit_enrich:
+    enabled: true
+    rate_limit_seconds: 6.0
+    top_comments: 5
   http_retry:
     max_attempts: 4
     backoff_base_seconds: 1   # 1, 2, 4, 8

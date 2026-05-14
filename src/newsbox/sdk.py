@@ -43,6 +43,36 @@ from typing import Iterator
 
 
 @dataclass(frozen=True, slots=True)
+class RedditCommentRow:
+    """消费方视角的一条 reddit 评论（s13-reddit-comments-enrich）。
+
+    采集层 ``reddit_comments`` 表的对外投影。入库前已按
+    ``kind == 't1'`` + author 非 AutoModerator|[deleted] + body 非
+    [deleted]|[removed] 过滤；``rank`` 由富化模块按过滤后 score desc 顺序赋值
+    （1-indexed），消费方按 rank ASC 拿到的就是热度从高到低的评论。
+    """
+
+    article_id: int
+    """关联的 ``articles_raw.id``。"""
+
+    comment_id: str
+    """reddit ``t1_xxx``。"""
+
+    parent_id: str | None
+    """父评论 id（顶层评论时 = 帖子 ``t3_xxx``）。"""
+
+    author: str
+    score: int
+    body: str
+
+    created_utc: datetime | None
+    """reddit 偶有未返回；缺失允许 None。"""
+
+    rank: int
+    """过滤后按 score 倒序的位置（1-indexed）。"""
+
+
+@dataclass(frozen=True, slots=True)
 class ArticleRaw:
     """消费方视角的一条原始文章。
 
@@ -165,7 +195,78 @@ def read_raw(
         conn.close()
 
 
+# ---- reddit 评论查询 --------------------------------------------------------
+
+
+def get_reddit_comments(
+    article_id: int,
+    db_path: Path | None = None,
+) -> list[RedditCommentRow]:
+    """读取一篇 reddit 文章的全部评论（s13-reddit-comments-enrich）。
+
+    参数:
+        article_id: ``articles_raw.id``；非 reddit 文章会返回空 list（外键侧
+            不存在对应行）。
+        db_path: 覆盖默认 ``~/.newsbox/raw.db``；测试 / 多 db 场景使用。
+
+    返回:
+        ``RedditCommentRow`` 列表，按 ``rank ASC`` 排序（rank=1 是过滤后
+        score 最高的评论；默认 top 5）。无评论时返回空 list。
+
+    Raises:
+        FileNotFoundError: db_path 指向的文件不存在。
+
+    设计取舍：
+        - 返回 list 而非 generator——单篇帖子评论数量极小（默认 top 5），
+          一次性 fetchall 比游标迭代更清晰，调用方可直接 ``[0].body`` 取头条。
+        - 不接受 since / limit 等过滤——评论按 article_id 强关联，过滤场景
+          应在 ``read_raw`` 层完成后逐 article 调用本函数。
+        - 与 ``read_raw`` 共享 ``FileNotFoundError`` 兜底语义。
+    """
+    db = Path(db_path) if db_path is not None else _DEFAULT_DB_PATH
+    if not db.exists():
+        raise FileNotFoundError(
+            f"raw.db 未找到：{db}. 请先运行 newsbox fetch 落库，"
+            f"或通过 db_path 参数指向已存在的 raw.db。"
+        )
+
+    sql = (
+        "SELECT article_id, comment_id, parent_id, author, score, body, "
+        "created_utc, rank "
+        "FROM reddit_comments WHERE article_id = :article_id "
+        "ORDER BY rank ASC"
+    )
+    conn = sqlite3.connect(str(db))
+    conn.row_factory = sqlite3.Row
+    try:
+        with closing(conn.execute(sql, {"article_id": article_id})) as cur:
+            return [_row_to_comment(row) for row in cur]
+    finally:
+        conn.close()
+
+
 # ---- 内部 helpers -----------------------------------------------------------
+
+
+def _row_to_comment(row: sqlite3.Row) -> RedditCommentRow:
+    """sqlite Row → RedditCommentRow。
+
+    - created_utc 列允许 NULL；NULL 时返回 None（reddit 偶有未返回）。
+    - parent_id 列允许 NULL；NULL 时返回 None。
+    """
+    created_raw = row["created_utc"]
+    created_utc = datetime.fromisoformat(created_raw) if created_raw else None
+
+    return RedditCommentRow(
+        article_id=row["article_id"],
+        comment_id=row["comment_id"],
+        parent_id=row["parent_id"],
+        author=row["author"],
+        score=row["score"],
+        body=row["body"],
+        created_utc=created_utc,
+        rank=row["rank"],
+    )
 
 
 def _row_to_article(row: sqlite3.Row) -> ArticleRaw:

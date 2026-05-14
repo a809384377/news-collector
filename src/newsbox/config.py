@@ -42,11 +42,25 @@ class TwikitFetchConfig(BaseModel):
     max_pages: int = 5
 
 
+class RedditEnrichConfig(BaseModel):
+    """reddit `.json` 富化配置（s13 新增）。
+
+    enabled: 关闭后 reddit 走原始 RSS 路径（兼容/逃生舱）
+    rate_limit_seconds: 富化成功后等待秒数（10 QPM 无 OAuth 上限保守 6s）
+    top_comments: 每帖入库的顶层评论数
+    """
+
+    enabled: bool = True
+    rate_limit_seconds: float = 6.0
+    top_comments: int = 5
+
+
 class FetchConfig(BaseModel):
     default_since: str
     per_source_rate_limit_seconds: dict[str, int]
     concurrency: dict[str, int] = Field(default_factory=lambda: {"rss": 8, "web": 1})
     twikit: TwikitFetchConfig = Field(default_factory=TwikitFetchConfig)
+    reddit_enrich: RedditEnrichConfig = Field(default_factory=RedditEnrichConfig)
     http_retry: HttpRetryConfig
     consecutive_failure_skip: int
 

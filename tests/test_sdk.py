@@ -28,7 +28,7 @@ from pathlib import Path
 import pytest
 
 from newsbox.db import get_conn, init_db
-from newsbox.sdk import ArticleRaw, read_raw
+from newsbox.sdk import ArticleRaw, RedditCommentRow, get_reddit_comments, read_raw
 
 
 # ---- helpers ---------------------------------------------------------------
@@ -352,3 +352,193 @@ def test_missing_db_raises_file_not_found(tmp_path: Path) -> None:
     missing = tmp_path / "does-not-exist.db"
     with pytest.raises(FileNotFoundError):
         list(read_raw(db_path=missing))
+
+
+# ---- get_reddit_comments / RedditCommentRow (s13-reddit-comments-enrich) ----
+
+
+_INSERT_COMMENT_SQL = """
+    INSERT INTO reddit_comments (
+        article_id, comment_id, parent_id, author, score, body,
+        created_utc, rank
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+"""
+
+
+def _insert_comment(
+    conn: sqlite3.Connection,
+    *,
+    article_id: int,
+    comment_id: str,
+    rank: int,
+    score: int = 10,
+    author: str = "alice",
+    body: str = "comment body",
+    parent_id: str | None = "t3_post",
+    created_utc: datetime | None = None,
+) -> None:
+    conn.execute(
+        _INSERT_COMMENT_SQL,
+        (
+            article_id,
+            comment_id,
+            parent_id,
+            author,
+            score,
+            body,
+            created_utc.isoformat() if created_utc else None,
+            rank,
+        ),
+    )
+
+
+def _seed_article_and_comments(
+    db_path: Path,
+    *,
+    article_external_id: str = "t3_post",
+    comments: list[tuple[str, int, int]] | None = None,
+) -> int:
+    """灌一条 reddit 帖子 + 指定评论行；返回 article_id。
+
+    comments 元组: (comment_id, rank, score)。
+    """
+    base = datetime(2026, 5, 14, 10, 0, tzinfo=timezone.utc)
+    conn = get_conn(db_path)
+    try:
+        _insert(
+            conn,
+            source_type="rss",
+            source_id="r_codex",
+            external_id=article_external_id,
+            url=f"https://www.reddit.com/r/codex/comments/{article_external_id}/x/",
+            fetched_at=base,
+        )
+        article_id = conn.execute(
+            "SELECT id FROM articles_raw WHERE external_id = ?",
+            (article_external_id,),
+        ).fetchone()[0]
+        for cid, rank, score in comments or []:
+            _insert_comment(
+                conn,
+                article_id=article_id,
+                comment_id=cid,
+                rank=rank,
+                score=score,
+            )
+        conn.commit()
+        return article_id
+    finally:
+        conn.close()
+
+
+def test_get_reddit_comments_empty_when_no_rows(empty_db: Path) -> None:
+    """article 存在但无评论 → 返回空 list（非 reddit 帖子同理）。"""
+    article_id = _seed_article_and_comments(empty_db, comments=[])
+    assert get_reddit_comments(article_id, db_path=empty_db) == []
+    # 不存在的 article_id 也应返回空 list（外键侧无对应行）
+    assert get_reddit_comments(99999, db_path=empty_db) == []
+
+
+def test_get_reddit_comments_ordered_by_rank_asc(empty_db: Path) -> None:
+    """5 条评论故意乱序插入，输出严格按 rank ASC（rank=1 在前）。"""
+    article_id = _seed_article_and_comments(
+        empty_db,
+        comments=[
+            ("t1_e", 5, 1),   # rank 5
+            ("t1_a", 1, 100), # rank 1
+            ("t1_c", 3, 30),  # rank 3
+            ("t1_b", 2, 80),  # rank 2
+            ("t1_d", 4, 10),  # rank 4
+        ],
+    )
+    rows = get_reddit_comments(article_id, db_path=empty_db)
+    assert [r.comment_id for r in rows] == ["t1_a", "t1_b", "t1_c", "t1_d", "t1_e"]
+    assert [r.rank for r in rows] == [1, 2, 3, 4, 5]
+    # 同时确认 article_id 透传正确
+    assert all(r.article_id == article_id for r in rows)
+
+
+def test_get_reddit_comments_isolates_by_article_id(empty_db: Path) -> None:
+    """两个 article 各自评论不互窜。"""
+    art_a = _seed_article_and_comments(
+        empty_db,
+        article_external_id="t3_postA",
+        comments=[("t1_a1", 1, 50), ("t1_a2", 2, 30)],
+    )
+    art_b = _seed_article_and_comments(
+        empty_db,
+        article_external_id="t3_postB",
+        comments=[("t1_b1", 1, 70)],
+    )
+    rows_a = get_reddit_comments(art_a, db_path=empty_db)
+    rows_b = get_reddit_comments(art_b, db_path=empty_db)
+    assert {r.comment_id for r in rows_a} == {"t1_a1", "t1_a2"}
+    assert {r.comment_id for r in rows_b} == {"t1_b1"}
+
+
+def test_reddit_comment_row_is_frozen(empty_db: Path) -> None:
+    article_id = _seed_article_and_comments(
+        empty_db, comments=[("t1_x", 1, 50)]
+    )
+    row = get_reddit_comments(article_id, db_path=empty_db)[0]
+    with pytest.raises((FrozenInstanceError, AttributeError)):
+        row.score = 999  # type: ignore[misc]
+
+
+def test_reddit_comment_row_handles_null_optional_fields(empty_db: Path) -> None:
+    """created_utc 与 parent_id 允许 NULL；列回 None 不报错。"""
+    base = datetime(2026, 5, 14, 10, 0, tzinfo=timezone.utc)
+    conn = get_conn(empty_db)
+    try:
+        _insert(
+            conn,
+            source_type="rss",
+            source_id="r_codex",
+            external_id="t3_null",
+            url="https://www.reddit.com/r/codex/comments/t3_null/x/",
+            fetched_at=base,
+        )
+        article_id = conn.execute(
+            "SELECT id FROM articles_raw WHERE external_id = 't3_null'"
+        ).fetchone()[0]
+        # created_utc=NULL + parent_id=NULL（顶层评论无父；reddit 偶有缺时间）
+        _insert_comment(
+            conn,
+            article_id=article_id,
+            comment_id="t1_naked",
+            rank=1,
+            parent_id=None,
+            created_utc=None,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    row = get_reddit_comments(article_id, db_path=empty_db)[0]
+    assert row.parent_id is None
+    assert row.created_utc is None
+    assert row.comment_id == "t1_naked"
+
+
+def test_get_reddit_comments_missing_db_raises_file_not_found(
+    tmp_path: Path,
+) -> None:
+    missing = tmp_path / "does-not-exist.db"
+    with pytest.raises(FileNotFoundError):
+        get_reddit_comments(1, db_path=missing)
+
+
+def test_reddit_comment_row_field_contract() -> None:
+    """RedditCommentRow 字段集合锁定（防 schema 漂移）。"""
+    fields = set(RedditCommentRow.__dataclass_fields__.keys())
+    expected = {
+        "article_id",
+        "comment_id",
+        "parent_id",
+        "author",
+        "score",
+        "body",
+        "created_utc",
+        "rank",
+    }
+    assert fields == expected, f"RedditCommentRow 字段不符合契约: {fields}"

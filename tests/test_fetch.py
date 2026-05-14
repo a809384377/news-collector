@@ -23,7 +23,7 @@ from newsbox.config import (
     LoggingConfig,
     Secrets,
 )
-from newsbox.models import RawArticle
+from newsbox.models import RawArticle, RedditComment, RedditEnrichment
 from newsbox.pipeline import fetch as fetch_module
 
 
@@ -608,6 +608,194 @@ def test_run_fetch_propagates_is_long_form(tmp_path: Path) -> None:
             "SELECT is_long_form FROM articles_raw WHERE external_id='ext-lf'"
         )
         assert cur.fetchone()[0] == "article"
+    finally:
+        conn.close()
+
+
+# ---- s13 reddit 富化端到端 -------------------------------------------------
+
+
+def _enriched_reddit_article(
+    *,
+    ext_id: str = "t3_abc",
+    num_comments_total: int = 3,
+    source_id: str = "r_localllama",
+) -> RawArticle:
+    """构造一条 reddit 富化产出 article（适配 StubAdapter）。"""
+    comments = tuple(
+        RedditComment(
+            comment_id=f"t1_{i+1}",
+            parent_id=ext_id,
+            author=f"user{i+1}",
+            score=100 - i * 10,
+            body=f"Comment {i+1} body",
+            created_utc=datetime(2026, 5, 1, 12, i, 0, tzinfo=timezone.utc),
+            rank=i + 1,
+        )
+        for i in range(num_comments_total)
+    )
+    enrichment = RedditEnrichment(
+        name=ext_id,
+        subreddit="LocalLLaMA",
+        score=200,
+        upvote_ratio=0.95,
+        num_comments=num_comments_total,
+        flair="News",
+        selftext="self body",
+        top_comments=comments,
+    )
+    return RawArticle(
+        source_type="rss",
+        source_id=source_id,
+        external_id=ext_id,
+        url=f"https://www.reddit.com/r/LocalLLaMA/comments/{ext_id[3:]}/foo/",
+        title="post title",
+        body="> **r/LocalLLaMA** · score=200 · 95% · 3 comments · flair: News\n\nself body",
+        published_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+        enrichment=enrichment,
+    )
+
+
+def test_run_fetch_reddit_enrichment_persists_comments(tmp_path: Path) -> None:
+    """带 enrichment 的 article 入库后 reddit_comments 表应有对应行。"""
+    db_path = _setup_db(tmp_path)
+    yaml_path = _setup_sources_yaml(
+        tmp_path,
+        content=(
+            "rss:\n"
+            "  - id: r_localllama\n"
+            "    url: https://www.reddit.com/r/LocalLLaMA/.rss\n"
+            "    tier: secondary\n"
+        ),
+    )
+    cfg = _make_config()
+
+    art = _enriched_reddit_article(num_comments_total=3)
+
+    summary = _run(
+        fetch_module.run_fetch(
+            tmp_path,
+            db_path=db_path,
+            sources_yaml=yaml_path,
+            config=cfg,
+            adapter_registry={"rss": StubAdapter.factory([art])},
+        )
+    )
+    assert summary.results[0].inserted == 1
+
+    conn = db_module.get_conn(db_path)
+    try:
+        article_id = conn.execute(
+            "SELECT id FROM articles_raw WHERE external_id=?", (art.external_id,)
+        ).fetchone()[0]
+        rows = conn.execute(
+            "SELECT comment_id, author, score, rank FROM reddit_comments "
+            "WHERE article_id=? ORDER BY rank",
+            (article_id,),
+        ).fetchall()
+        assert len(rows) == 3
+        assert [r["comment_id"] for r in rows] == ["t1_1", "t1_2", "t1_3"]
+        assert [r["author"] for r in rows] == ["user1", "user2", "user3"]
+        assert [r["score"] for r in rows] == [100, 90, 80]
+        assert [r["rank"] for r in rows] == [1, 2, 3]
+    finally:
+        conn.close()
+
+
+def test_run_fetch_reddit_dup_external_does_not_re_insert_comments(tmp_path: Path) -> None:
+    """同 article 第二次入库 (dup_external) 不应重写评论；UNIQUE 让二次 enrich 幂等。"""
+    db_path = _setup_db(tmp_path)
+    yaml_path = _setup_sources_yaml(
+        tmp_path,
+        content=(
+            "rss:\n"
+            "  - id: r_localllama\n"
+            "    url: https://www.reddit.com/r/LocalLLaMA/.rss\n"
+            "    tier: secondary\n"
+        ),
+    )
+    cfg = _make_config()
+
+    art = _enriched_reddit_article(num_comments_total=2)
+
+    # 第一次：article + 评论双双入库
+    _run(
+        fetch_module.run_fetch(
+            tmp_path,
+            db_path=db_path,
+            sources_yaml=yaml_path,
+            config=cfg,
+            adapter_registry={"rss": StubAdapter.factory([art])},
+        )
+    )
+
+    # 第二次：相同 external_id → dup_external → 评论入库逻辑不应触发
+    summary2 = _run(
+        fetch_module.run_fetch(
+            tmp_path,
+            db_path=db_path,
+            sources_yaml=yaml_path,
+            config=cfg,
+            adapter_registry={"rss": StubAdapter.factory([art])},
+        )
+    )
+    assert summary2.results[0].deduped_external == 1
+    assert summary2.results[0].inserted == 0
+
+    conn = db_module.get_conn(db_path)
+    try:
+        cnt = conn.execute("SELECT COUNT(*) FROM reddit_comments").fetchone()[0]
+        assert cnt == 2, f"评论表应仍 2 行（首次入库后未重复写），got {cnt}"
+    finally:
+        conn.close()
+
+
+def test_build_adapter_injects_reddit_enrich_config_to_rss_adapter() -> None:
+    """_build_adapter 对 RSSAdapter 注入 reddit_enrich 配置；其他 adapter 走默认。"""
+    from newsbox.adapters.rss_adapter import RSSAdapter
+    from newsbox.config import RedditEnrichConfig
+
+    cfg = _make_config()
+    # _make_config 没显式提供 reddit_enrich，pydantic 会用 default_factory 给 RedditEnrichConfig 默认
+    assert isinstance(cfg.fetch.reddit_enrich, RedditEnrichConfig)
+    cfg.fetch.reddit_enrich = RedditEnrichConfig(
+        enabled=False, rate_limit_seconds=0.0, top_comments=3
+    )
+
+    registry = {"rss": RSSAdapter, "stub": StubAdapter.factory([])}
+    rss_adapter = fetch_module._build_adapter("rss", registry, cfg)
+    assert isinstance(rss_adapter, RSSAdapter)
+    assert rss_adapter._reddit_enrich_enabled is False
+    assert rss_adapter._reddit_enrich_rate_seconds == 0.0
+    assert rss_adapter._reddit_top_comments == 3
+
+    # 非 RSSAdapter 走无参路径
+    other = fetch_module._build_adapter("stub", registry, cfg)
+    assert isinstance(other, StubAdapter)
+
+
+def test_run_fetch_non_reddit_article_skips_comment_table(tmp_path: Path) -> None:
+    """无 enrichment 的普通 article 不应往 reddit_comments 写任何行。"""
+    db_path = _setup_db(tmp_path)
+    yaml_path = _setup_sources_yaml(tmp_path)
+    cfg = _make_config()
+
+    art = _make_article("anthropic_blog", "ext-1", "https://www.anthropic.com/news/a")
+
+    _run(
+        fetch_module.run_fetch(
+            tmp_path,
+            db_path=db_path,
+            sources_yaml=yaml_path,
+            config=cfg,
+            adapter_registry={"rss": StubAdapter.factory([art])},
+        )
+    )
+
+    conn = db_module.get_conn(db_path)
+    try:
+        cnt = conn.execute("SELECT COUNT(*) FROM reddit_comments").fetchone()[0]
+        assert cnt == 0
     finally:
         conn.close()
 

@@ -7,6 +7,8 @@
 4. articles_raw 表 ``(source_type, external_id)`` UNIQUE 约束生效
 5. articles_raw.domain_tags 缺省值为 '["ai"]'
 6. 0002 migration 应用后：status / last_error 列已删；idx_status / idx_domain 已删
+7. 0003 migration 应用后：reddit_comments 表 + idx_reddit_comments_article 索引就位
+   UNIQUE(article_id, comment_id) + FK 生效
 """
 
 from __future__ import annotations
@@ -42,23 +44,26 @@ def _index_names(conn: sqlite3.Connection) -> set[str]:
 
 
 def test_apply_migrations_creates_tables(tmp_path: Path) -> None:
-    """采集层只剩两张表：articles_raw + source_state；不再有 clusters / reports / articles_vec。"""
+    """采集层表：articles_raw + source_state；0003 起加 reddit_comments；不再有 clusters / reports / articles_vec。"""
     db_path = tmp_path / "raw.db"
     init_db(db_path)
 
     conn = get_conn(db_path)
     try:
         tables = _table_names(conn)
-        for required in ("articles_raw", "source_state"):
+        for required in ("articles_raw", "source_state", "reddit_comments"):
             assert required in tables, f"缺少表 {required}; got {tables}"
         # 已删除的 AI 加工层表
         for forbidden in ("articles", "clusters", "reports", "articles_vec"):
             assert forbidden not in tables, f"采集层不应有表 {forbidden}; got {tables}"
 
         indexes = _index_names(conn)
-        # 0001 建 5 个 idx_*，0002 删除 idx_status + idx_domain → 剩 3 个
+        # 0001 建 5 个 idx_*，0002 删除 idx_status + idx_domain → 剩 3 个；0003 加 idx_reddit_comments_article
         idx_prefix_count = sum(1 for name in indexes if name.startswith("idx_"))
-        assert idx_prefix_count >= 3, f"idx_* 索引不足 3 个: {indexes}"
+        assert idx_prefix_count >= 4, f"idx_* 索引不足 4 个: {indexes}"
+        assert "idx_reddit_comments_article" in indexes, (
+            f"0003 应建 idx_reddit_comments_article: {indexes}"
+        )
         # 0002 已删除的索引必须不在
         for forbidden_idx in ("idx_status", "idx_domain"):
             assert forbidden_idx not in indexes, (
@@ -143,6 +148,60 @@ def test_articles_raw_unique_constraint(tmp_path: Path) -> None:
         with pytest.raises(sqlite3.IntegrityError):
             # 同样的 (source_type='rss', external_id='abc') 必须冲突
             conn.execute(insert_sql, params)
+            conn.commit()
+    finally:
+        conn.close()
+
+
+def test_reddit_comments_unique_and_fk(tmp_path: Path) -> None:
+    """0003：reddit_comments UNIQUE(article_id, comment_id) + FK 行为。
+
+    - 同 (article_id, comment_id) 重复 insert 必须冲突
+    - FK 指向不存在的 articles_raw.id 时 PRAGMA foreign_keys=ON 应拦截
+    """
+    db_path = tmp_path / "raw.db"
+    init_db(db_path)
+
+    conn = get_conn(db_path)
+    try:
+        # 先插一条 articles_raw 拿到 article_id
+        conn.execute(
+            """
+            INSERT INTO articles_raw (
+                source_type, source_id, source_tier, external_id,
+                url, url_canonical_hash, content_hash, title, body,
+                fetched_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "rss", "r_localllama", "secondary", "t3_abc",
+                "https://www.reddit.com/r/LocalLLaMA/comments/abc/foo/",
+                "hash-url", "hash-content", "Title", "Body",
+                "2026-05-14T00:00:00",
+            ),
+        )
+        article_id = conn.execute("SELECT id FROM articles_raw WHERE external_id='t3_abc'").fetchone()[0]
+        conn.commit()
+
+        insert_comment_sql = """
+            INSERT INTO reddit_comments (
+                article_id, comment_id, parent_id, author, score, body, created_utc, rank
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        params = (article_id, "t1_xx1", "t3_abc", "alice", 10, "ok", None, 1)
+        conn.execute(insert_comment_sql, params)
+        conn.commit()
+
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(insert_comment_sql, params)
+            conn.commit()
+
+        # FK 拦截：article_id 指向不存在
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                insert_comment_sql,
+                (99999, "t1_yy1", "t3_xxx", "bob", 5, "x", None, 1),
+            )
             conn.commit()
     finally:
         conn.close()
